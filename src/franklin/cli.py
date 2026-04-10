@@ -17,6 +17,7 @@ from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.schema import BookManifest, ChapterKind, NormalizedChapter
+from franklin.secrets import MissingApiKeyError, ensure_anthropic_api_key
 
 app = typer.Typer(
     name="franklin",
@@ -140,6 +141,12 @@ def map_chapters(
     if dry_run:
         _dry_run_prompt(run, manifest, targets[0])
         return
+
+    try:
+        ensure_anthropic_api_key()
+    except MissingApiKeyError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     _extract_all(run, manifest, targets, model=model, force=force)
 
