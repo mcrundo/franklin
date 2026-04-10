@@ -255,8 +255,30 @@ class CrossReference(_Base):
     reason: str
 
 
+class ChapterExtraction(_Base):
+    """Output of the map-stage LLM call.
+
+    Carries only the categories the model actually extracts. The map stage
+    merges this with ingest metadata (chapter_id, title, order, source_ref,
+    word_count) into a full ChapterSidecar. Keeping extraction and metadata
+    separate means the tool-use schema stays tight — the model never sees
+    fields it shouldn't be filling in.
+    """
+
+    summary: str
+    concepts: list[Concept] = Field(default_factory=list)
+    principles: list[Principle] = Field(default_factory=list)
+    rules: list[Rule] = Field(default_factory=list)
+    anti_patterns: list[AntiPattern] = Field(default_factory=list)
+    code_examples: list[CodeExample] = Field(default_factory=list)
+    decision_rules: list[DecisionRule] = Field(default_factory=list)
+    actionable_workflows: list[ActionableWorkflow] = Field(default_factory=list)
+    terminology: list[TerminologyEntry] = Field(default_factory=list)
+    cross_references: list[CrossReference] = Field(default_factory=list)
+
+
 class ChapterSidecar(_Base):
-    """Structured extraction output for a single chapter, produced by the map stage."""
+    """Full structured extraction for a single chapter, merged and persisted."""
 
     chapter_id: str
     title: str
@@ -274,6 +296,28 @@ class ChapterSidecar(_Base):
     actionable_workflows: list[ActionableWorkflow] = Field(default_factory=list)
     terminology: list[TerminologyEntry] = Field(default_factory=list)
     cross_references: list[CrossReference] = Field(default_factory=list)
+
+    @classmethod
+    def from_extraction(
+        cls, chapter: NormalizedChapter, extraction: ChapterExtraction
+    ) -> ChapterSidecar:
+        return cls(
+            chapter_id=chapter.chapter_id,
+            title=chapter.title,
+            order=chapter.order,
+            source_ref=chapter.source_ref,
+            word_count=chapter.word_count,
+            summary=extraction.summary,
+            concepts=extraction.concepts,
+            principles=extraction.principles,
+            rules=extraction.rules,
+            anti_patterns=extraction.anti_patterns,
+            code_examples=extraction.code_examples,
+            decision_rules=extraction.decision_rules,
+            actionable_workflows=extraction.actionable_workflows,
+            terminology=extraction.terminology,
+            cross_references=extraction.cross_references,
+        )
 
 
 # ---------------------------------------------------------------------------
