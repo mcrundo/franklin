@@ -15,6 +15,7 @@ from rich.table import Table
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
+from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.schema import BookManifest, ChapterKind, NormalizedChapter
 
 app = typer.Typer(
@@ -107,14 +108,132 @@ def _print_ingest_summary(
     console.print(table)
 
 
+@app.command(name="map")
+def map_chapters(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory from `franklin ingest`"
+    ),
+    chapter: str | None = typer.Option(
+        None, "--chapter", "-c", help="Extract just this chapter_id (e.g. ch06)"
+    ),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Anthropic model ID"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Build and print the prompt without calling the API"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-extract chapters that already have sidecars"
+    ),
+) -> None:
+    """Run the map stage: per-chapter structured extraction via the LLM."""
+    run = RunDirectory(run_dir)
+    if not run.book_json.exists():
+        console.print(f"[red]error:[/red] no book.json in {run_dir} — run `franklin ingest` first")
+        raise typer.Exit(code=1)
+
+    manifest = run.load_book()
+    targets = _select_targets(run, manifest, chapter)
+
+    if not targets:
+        console.print("[yellow]no chapters to extract[/yellow]")
+        raise typer.Exit(code=0)
+
+    if dry_run:
+        _dry_run_prompt(run, manifest, targets[0])
+        return
+
+    _extract_all(run, manifest, targets, model=model, force=force)
+
+
+def _select_targets(
+    run: RunDirectory, manifest: BookManifest, chapter_id: str | None
+) -> list[NormalizedChapter]:
+    """Pick which chapters to extract.
+
+    Without --chapter, returns every CONTENT or INTRODUCTION chapter. With
+    --chapter, returns that single chapter regardless of classification (so
+    users can iterate on prompts against borderline chapters if they want).
+    """
+    if chapter_id is not None:
+        raw_path = run.raw_chapter_path(chapter_id)
+        if not raw_path.exists():
+            console.print(f"[red]error:[/red] chapter {chapter_id} not found in {run.raw_dir}")
+            raise typer.Exit(code=1)
+        return [run.load_raw_chapter(chapter_id)]
+
+    content_ids = [
+        entry.id
+        for entry in manifest.structure.toc
+        if entry.kind in (ChapterKind.CONTENT, ChapterKind.INTRODUCTION)
+    ]
+    return [run.load_raw_chapter(cid) for cid in content_ids]
+
+
+def _dry_run_prompt(
+    run: RunDirectory, manifest: BookManifest, chapter: NormalizedChapter
+) -> None:
+    prompt = build_user_prompt(manifest, chapter)
+    console.print(f"[bold]Dry run[/bold] — prompt for {chapter.chapter_id} ({chapter.title})")
+    console.print(f"  run dir: {run.root}")
+    console.print(f"  chars:   {len(prompt):,}")
+    console.print(f"  approx tokens: {len(prompt) // 4:,}")
+    console.print()
+    console.print(prompt)
+
+
+def _extract_all(
+    run: RunDirectory,
+    manifest: BookManifest,
+    targets: list[NormalizedChapter],
+    *,
+    model: str,
+    force: bool,
+) -> None:
+    total_in = 0
+    total_out = 0
+    skipped = 0
+
+    for chapter in targets:
+        sidecar_path = run.sidecar_path(chapter.chapter_id)
+        if sidecar_path.exists() and not force:
+            console.print(
+                f"[dim]skip[/dim] {chapter.chapter_id} — sidecar exists (use --force to re-run)"
+            )
+            skipped += 1
+            continue
+
+        console.print(
+            f"[bold]extract[/bold] {chapter.chapter_id} "
+            f"([cyan]{chapter.title}[/cyan], {chapter.word_count:,} words)"
+        )
+        sidecar, in_toks, out_toks = extract_chapter(manifest, chapter, model=model)
+        run.save_sidecar(sidecar)
+        total_in += in_toks
+        total_out += out_toks
+        console.print(
+            f"  [green]✓[/green] {len(sidecar.concepts)} concepts, "
+            f"{len(sidecar.principles)} principles, "
+            f"{len(sidecar.rules)} rules, "
+            f"{len(sidecar.anti_patterns)} anti-patterns, "
+            f"{len(sidecar.code_examples)} code examples "
+            f"([dim]{in_toks:,} in / {out_toks:,} out[/dim])"
+        )
+
+    console.print()
+    console.print(
+        f"[green]✓[/green] map stage complete: "
+        f"{len(targets) - skipped} extracted, {skipped} skipped, "
+        f"[dim]{total_in:,} input tokens / {total_out:,} output tokens[/dim]"
+    )
+
+
 @app.command(name="run")
 def run_pipeline(
     book_path: Path = typer.Argument(..., exists=True, readable=True),
     output: Path | None = typer.Option(None, "--output", "-o"),
 ) -> None:
-    """Run the full pipeline end-to-end. [v0.1: only ingest is implemented]"""
+    """Run the full pipeline end-to-end. [v0.1: ingest + classify only]"""
     ingest(book_path=book_path, output=output)
-    console.print("[yellow]map / plan / reduce / assemble: not yet implemented[/yellow]")
+    console.print("[yellow]map / plan / reduce / assemble: not yet wired into run[/yellow]")
 
 
 if __name__ == "__main__":
