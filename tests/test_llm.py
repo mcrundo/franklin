@@ -11,6 +11,22 @@ from franklin.llm.client import call_tool
 from franklin.llm.prompts import load_prompt, render_prompt
 
 
+class _FakeStream:
+    """Context-manager stand-in for anthropic's streaming helper."""
+
+    def __init__(self, response: Any) -> None:
+        self._response = response
+
+    def __enter__(self) -> _FakeStream:
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        return None
+
+    def get_final_message(self) -> Any:
+        return self._response
+
+
 class _FakeClient:
     """Minimal stand-in for anthropic.Anthropic for unit tests."""
 
@@ -19,12 +35,14 @@ class _FakeClient:
         self.last_kwargs: dict[str, Any] | None = None
         self.messages = self
 
-    def create(self, **kwargs: Any) -> Any:
+    def stream(self, **kwargs: Any) -> _FakeStream:
         self.last_kwargs = kwargs
-        return SimpleNamespace(
-            content=[SimpleNamespace(type="tool_use", input=self._tool_input)],
-            stop_reason="tool_use",
-            usage=SimpleNamespace(input_tokens=100, output_tokens=50),
+        return _FakeStream(
+            SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input=self._tool_input)],
+                stop_reason="tool_use",
+                usage=SimpleNamespace(input_tokens=100, output_tokens=50),
+            )
         )
 
 
@@ -58,11 +76,13 @@ def test_call_tool_raises_when_no_tool_use_block() -> None:
         def __init__(self) -> None:
             self.messages = self
 
-        def create(self, **_: Any) -> Any:
-            return SimpleNamespace(
-                content=[SimpleNamespace(type="text", text="just prose")],
-                stop_reason="end_turn",
-                usage=SimpleNamespace(input_tokens=0, output_tokens=0),
+        def stream(self, **_: Any) -> _FakeStream:
+            return _FakeStream(
+                SimpleNamespace(
+                    content=[SimpleNamespace(type="text", text="just prose")],
+                    stop_reason="end_turn",
+                    usage=SimpleNamespace(input_tokens=0, output_tokens=0),
+                )
             )
 
     with pytest.raises(RuntimeError, match="tool_use"):

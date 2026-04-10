@@ -106,18 +106,34 @@ def test_build_tool_schema_is_an_object_schema() -> None:
         assert category in schema["properties"], f"missing category {category}"
 
 
+class _FakeStream:
+    def __init__(self, response: Any) -> None:
+        self._response = response
+
+    def __enter__(self) -> _FakeStream:
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        return None
+
+    def get_final_message(self) -> Any:
+        return self._response
+
+
 class _FakeClient:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
         self.messages = self
         self.last_kwargs: dict[str, Any] | None = None
 
-    def create(self, **kwargs: Any) -> Any:
+    def stream(self, **kwargs: Any) -> _FakeStream:
         self.last_kwargs = kwargs
-        return SimpleNamespace(
-            content=[SimpleNamespace(type="tool_use", input=self._payload)],
-            stop_reason="tool_use",
-            usage=SimpleNamespace(input_tokens=123, output_tokens=456),
+        return _FakeStream(
+            SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input=self._payload)],
+                stop_reason="tool_use",
+                usage=SimpleNamespace(input_tokens=123, output_tokens=456),
+            )
         )
 
 

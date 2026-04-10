@@ -53,24 +53,33 @@ def call_tool(
 ) -> ToolResult:
     """Call Claude with forced tool use and return the parsed tool input.
 
+    Uses the streaming entrypoint (`messages.stream`) because the SDK
+    refuses non-streaming calls whose max_tokens could in principle exceed
+    a 10-minute wall-clock budget. Streaming collects the same final
+    message — we only read it after the stream completes, so the behavior
+    is identical to a .create() call from the caller's perspective.
+
     Raises RuntimeError if the response does not contain a tool_use block,
     which should not happen when tool_choice is set but is worth surfacing
     clearly if it does.
     """
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-        tools=[
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+        "tools": [
             {
                 "name": tool_name,
                 "description": tool_description,
                 "input_schema": tool_schema,
             }
         ],
-        tool_choice={"type": "tool", "name": tool_name},
-    )
+        "tool_choice": {"type": "tool", "name": tool_name},
+    }
+
+    with client.messages.stream(**kwargs) as stream:
+        response = stream.get_final_message()
 
     for block in response.content:
         if getattr(block, "type", None) == "tool_use":
