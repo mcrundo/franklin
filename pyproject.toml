@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "franklin"
+version = "0.1.0"
+description = "Turn technical books into Claude Code plugins"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "Matt Rundo" }]
+dependencies = [
+    "anthropic>=0.40,<1",
+    "beautifulsoup4>=4.12,<5",
+    "ebooklib>=0.18,<1",
+    "lxml>=5,<6",
+    "pydantic>=2.9,<3",
+    "rich>=13,<14",
+    "tenacity>=9,<10",
+    "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-cov>=6,<7",
+    "mypy>=1.14,<2",
+    "ruff>=0.9,<1",
+    "pre-commit>=4,<5",
+]
+
+[project.scripts]
+franklin = "franklin.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/franklin"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests"]
+line-length = 99
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific rules
+]
+ignore = [
+    "B008",  # typer uses function calls in argument defaults by design
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+packages = ["franklin"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --tb=short"
