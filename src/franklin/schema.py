@@ -55,6 +55,20 @@ class ArtifactType(StrEnum):
     PLUGIN_MANIFEST = "plugin_manifest"
 
 
+class ChapterKind(StrEnum):
+    """Role of a chapter within the book.
+
+    The map stage runs full extraction only on CONTENT and INTRODUCTION
+    chapters; everything else is skipped or handled with a cheaper pass.
+    """
+
+    CONTENT = "content"
+    INTRODUCTION = "introduction"
+    PART_DIVIDER = "part_divider"
+    FRONT_MATTER = "front_matter"
+    BACK_MATTER = "back_matter"
+
+
 # ---------------------------------------------------------------------------
 # Raw ingest output
 # ---------------------------------------------------------------------------
@@ -116,6 +130,9 @@ class TocEntry(_Base):
     level: int = 1
     word_count: int = 0
     source_ref: str
+    kind: ChapterKind = ChapterKind.CONTENT
+    kind_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    kind_reason: str = ""
 
 
 class BookStructure(_Base):
