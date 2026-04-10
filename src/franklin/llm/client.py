@@ -17,7 +17,12 @@ from typing import Any
 
 from anthropic import Anthropic
 
-DEFAULT_MAX_TOKENS = 16_000
+# max_tokens is a safety ceiling, not a billing amount — you only pay for
+# what the model actually generates. We set this high enough that even the
+# longest chapters can't be truncated mid-extraction. A dedicated cost
+# estimator (scaling from word count and code block count) will land later
+# as its own feature to show predicted spend before a run kicks off.
+DEFAULT_MAX_TOKENS = 32_000
 
 
 @dataclass(frozen=True)

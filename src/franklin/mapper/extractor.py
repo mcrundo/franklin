@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from franklin.llm import call_tool, make_client, render_prompt
+from franklin.llm.client import DEFAULT_MAX_TOKENS
 from franklin.schema import (
     BookManifest,
     ChapterExtraction,
@@ -50,7 +51,7 @@ def extract_chapter(
     *,
     model: str = DEFAULT_MODEL,
     client: Any | None = None,
-    max_tokens: int = 16_000,
+    max_tokens: int | None = None,
 ) -> tuple[ChapterSidecar, int, int]:
     """Run the map stage against one chapter.
 
@@ -72,7 +73,7 @@ def extract_chapter(
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
         tool_schema=tool_schema,
-        max_tokens=max_tokens,
+        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
     )
 
     try:
