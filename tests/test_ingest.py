@@ -52,3 +52,46 @@ def test_detects_code_examples(ingested: tuple) -> None:
     _, chapters = ingested
     total_code = sum(len(c.code_blocks) for c in chapters)
     assert total_code > 0, "expected a technical book to contain code blocks"
+
+
+def test_layered_design_classification_end_to_end(tmp_path: Path) -> None:
+    """Run the full ingest CLI flow and check the classifier got Layered Design right."""
+    if not FIXTURE.exists():
+        pytest.skip(f"Fixture not found: {FIXTURE}")
+
+    from franklin.checkpoint import RunDirectory
+    from franklin.classify import classify_chapters
+    from franklin.schema import ChapterKind
+
+    run = RunDirectory(tmp_path / "run")
+    run.ensure()
+    manifest, chapters = ingest_epub(FIXTURE)
+    classifications = classify_chapters(chapters)
+    for entry in manifest.structure.toc:
+        result = classifications[entry.id]
+        entry.kind = result.kind
+        entry.kind_confidence = result.confidence
+        entry.kind_reason = result.reason
+
+    by_title = {e.title: e for e in manifest.structure.toc}
+
+    assert by_title["Table of Contents"].kind == ChapterKind.FRONT_MATTER
+    assert by_title["Preface"].kind == ChapterKind.INTRODUCTION
+
+    part_titles = [t for t in by_title if t.startswith("Part ")]
+    assert len(part_titles) >= 3
+    for title in part_titles:
+        assert by_title[title].kind == ChapterKind.PART_DIVIDER
+
+    chapter_titles = [t for t in by_title if t.startswith("Chapter ")]
+    assert len(chapter_titles) >= 10
+    for title in chapter_titles:
+        assert by_title[title].kind == ChapterKind.CONTENT
+
+    assert by_title["Index"].kind == ChapterKind.BACK_MATTER
+    assert by_title["Other Books You May Enjoy"].kind == ChapterKind.BACK_MATTER
+
+    # Roundtrip: save the classified manifest and load it back.
+    run.save_book(manifest)
+    reloaded = run.load_book()
+    assert reloaded.structure.toc[0].kind == manifest.structure.toc[0].kind

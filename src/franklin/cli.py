@@ -13,8 +13,9 @@ from rich.console import Console
 from rich.table import Table
 
 from franklin.checkpoint import RunDirectory, slugify
+from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
-from franklin.schema import BookManifest, NormalizedChapter
+from franklin.schema import BookManifest, ChapterKind, NormalizedChapter
 
 app = typer.Typer(
     name="franklin",
@@ -45,6 +46,13 @@ def ingest(
     console.print(f"[bold]Ingesting[/bold] {book_path}")
     manifest, chapters = ingest_epub(book_path)
 
+    classifications = classify_chapters(chapters)
+    for toc_entry in manifest.structure.toc:
+        result = classifications[toc_entry.id]
+        toc_entry.kind = result.kind
+        toc_entry.kind_confidence = result.confidence
+        toc_entry.kind_reason = result.reason
+
     run.save_book(manifest)
     for chapter in chapters:
         run.save_raw_chapter(chapter)
@@ -52,25 +60,50 @@ def ingest(
     _print_ingest_summary(run, manifest, chapters)
 
 
+_KIND_STYLES: dict[ChapterKind, str] = {
+    ChapterKind.CONTENT: "green",
+    ChapterKind.INTRODUCTION: "bold green",
+    ChapterKind.PART_DIVIDER: "yellow",
+    ChapterKind.FRONT_MATTER: "dim",
+    ChapterKind.BACK_MATTER: "dim",
+}
+
+
 def _print_ingest_summary(
     run: RunDirectory, manifest: BookManifest, chapters: list[NormalizedChapter]
 ) -> None:
+    content_count = sum(
+        1
+        for e in manifest.structure.toc
+        if e.kind in (ChapterKind.CONTENT, ChapterKind.INTRODUCTION)
+    )
+
     console.print()
     console.print(f"[green]✓[/green] Run directory: {run.root}")
     console.print(f"  Title:     {manifest.metadata.title}")
     console.print(f"  Authors:   {', '.join(manifest.metadata.authors) or '—'}")
-    console.print(f"  Chapters:  {len(chapters)}")
+    console.print(f"  Chapters:  {len(chapters)} ({content_count} content)")
     console.print(f"  Words:     {manifest.structure.total_words:,}")
-    console.print(f"  Code:     {'yes' if manifest.structure.has_code_examples else 'no'}")
+    console.print(f"  Code:      {'yes' if manifest.structure.has_code_examples else 'no'}")
     console.print()
 
+    by_id = {c.chapter_id: c for c in chapters}
     table = Table(title="Chapters", show_header=True, header_style="bold")
     table.add_column("ID", style="cyan")
+    table.add_column("Kind")
     table.add_column("Title")
     table.add_column("Words", justify="right")
     table.add_column("Code", justify="right")
-    for c in chapters:
-        table.add_row(c.chapter_id, c.title, f"{c.word_count:,}", str(len(c.code_blocks)))
+    for entry in manifest.structure.toc:
+        chapter = by_id[entry.id]
+        style = _KIND_STYLES.get(entry.kind, "")
+        table.add_row(
+            entry.id,
+            f"[{style}]{entry.kind.value}[/{style}]" if style else entry.kind.value,
+            entry.title,
+            f"{chapter.word_count:,}",
+            str(len(chapter.code_blocks)),
+        )
     console.print(table)
 
 
