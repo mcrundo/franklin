@@ -6,7 +6,8 @@ a top-level `run` that chains them end-to-end.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import contextlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from rich.progress import (
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
+    TaskID,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
@@ -149,6 +151,38 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
         return RunDirectory(output)
     slug = slugify(book_path.stem)
     return RunDirectory(Path.cwd() / "runs" / slug)
+
+
+@contextlib.contextmanager
+def _stage_progress(label: str) -> Iterator[tuple[Progress, TaskID]]:
+    """Rich Progress context shared by map, reduce, and cleanup stages.
+
+    Yields a ``(progress, task_id)`` tuple. Callers update ``task_id``
+    with ``advance=1`` and a ``last=...`` field per iteration; the bar
+    stays on one line and the `last` message shows the most recently
+    completed (or currently in-flight) item.
+    """
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn(f"[bold]{label}[/bold]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("·"),
+        TimeElapsedColumn(),
+        TextColumn("·"),
+        TimeRemainingColumn(),
+        TextColumn("· [dim]{task.fields[last]}[/dim]"),
+        console=console,
+        transient=False,
+    )
+    with progress:
+        task_id = progress.add_task(label.lower(), total=0, last="starting…")
+        yield progress, task_id
+
+
+def _sonnet_cost_usd(input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost for a pile of Sonnet tokens (post-call, not predictive)."""
+    return (input_tokens / 1_000_000) * 3.0 + (output_tokens / 1_000_000) * 15.0
 
 
 def _print_next_steps(
@@ -467,24 +501,8 @@ def _run_cleanup_pass(
     )
     console.print()
 
-    total_count = len(chapters)
-
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold]Cleaning[/bold]"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("·"),
-        TimeElapsedColumn(),
-        TextColumn("·"),
-        TimeRemainingColumn(),
-        TextColumn("· [dim]{task.fields[last]}[/dim]"),
-        console=console,
-        transient=False,
-    )
-
-    with progress:
-        task_id = progress.add_task("cleanup", total=total_count, last="starting…")
+    with _stage_progress("Cleaning") as (progress, task_id):
+        progress.update(task_id, total=len(chapters))
 
         def on_progress(chapter: NormalizedChapter) -> None:
             progress.update(
@@ -511,7 +529,7 @@ def _run_cleanup_pass(
 
     console.print()
     ok_count = len(cleaned) - len(failed_ids)
-    actual_cost = (total_in / 1_000_000) * 3.0 + (total_out / 1_000_000) * 15.0
+    actual_cost = _sonnet_cost_usd(total_in, total_out)
     console.print(
         f"[green]✓[/green] cleanup complete: {ok_count}/{len(cleaned)} chapters cleaned "
         f"[dim]({total_in:,} in / {total_out:,} out tokens · "
@@ -676,38 +694,40 @@ def _extract_all(
     total_in = 0
     total_out = 0
     skipped = 0
+    extracted = 0
 
-    for chapter in targets:
-        sidecar_path = run.sidecar_path(chapter.chapter_id)
-        if sidecar_path.exists() and not force:
-            console.print(
-                f"[dim]skip[/dim] {chapter.chapter_id} — sidecar exists (use --force to re-run)"
+    with _stage_progress("Mapping") as (progress, task_id):
+        progress.update(task_id, total=len(targets))
+
+        for chapter in targets:
+            sidecar_path = run.sidecar_path(chapter.chapter_id)
+            if sidecar_path.exists() and not force:
+                skipped += 1
+                progress.update(
+                    task_id,
+                    advance=1,
+                    last=f"skip {chapter.chapter_id}",
+                )
+                continue
+
+            progress.update(task_id, last=f"→ {chapter.chapter_id}")
+            sidecar, in_toks, out_toks = extract_chapter(manifest, chapter, model=model)
+            run.save_sidecar(sidecar)
+            total_in += in_toks
+            total_out += out_toks
+            extracted += 1
+            progress.update(
+                task_id,
+                advance=1,
+                last=(f"✓ {chapter.chapter_id} ({len(sidecar.concepts)}c/{len(sidecar.rules)}r)"),
             )
-            skipped += 1
-            continue
 
-        console.print(
-            f"[bold]extract[/bold] {chapter.chapter_id} "
-            f"([cyan]{chapter.title}[/cyan], {chapter.word_count:,} words)"
-        )
-        sidecar, in_toks, out_toks = extract_chapter(manifest, chapter, model=model)
-        run.save_sidecar(sidecar)
-        total_in += in_toks
-        total_out += out_toks
-        console.print(
-            f"  [green]✓[/green] {len(sidecar.concepts)} concepts, "
-            f"{len(sidecar.principles)} principles, "
-            f"{len(sidecar.rules)} rules, "
-            f"{len(sidecar.anti_patterns)} anti-patterns, "
-            f"{len(sidecar.code_examples)} code examples "
-            f"([dim]{in_toks:,} in / {out_toks:,} out[/dim])"
-        )
-
+    cost = _sonnet_cost_usd(total_in, total_out)
     console.print()
     console.print(
         f"[green]✓[/green] map stage complete: "
-        f"{len(targets) - skipped} extracted, {skipped} skipped, "
-        f"[dim]{total_in:,} input tokens / {total_out:,} output tokens[/dim]"
+        f"{extracted} extracted, {skipped} skipped "
+        f"[dim]({total_in:,} in / {total_out:,} out · ${cost:.2f})[/dim]"
     )
 
 
@@ -960,48 +980,51 @@ def _generate_artifacts(
         "failed": 0,
     }
 
-    for artifact in targets:
-        out_path = output_root / artifact.path
-        if out_path.exists() and not force:
-            console.print(f"[dim]skip[/dim] {artifact.id} — {artifact.path} already exists")
-            totals["skipped"] += 1
-            continue
+    with _stage_progress("Reducing") as (progress, task_id):
+        progress.update(task_id, total=len(targets))
 
-        console.print(
-            f"[bold]{artifact.type.value}[/bold] {artifact.id} → [cyan]{artifact.path}[/cyan]"
-        )
-        try:
-            result = generate_artifact(
-                artifact,
-                plan=plan,
-                book=book,
-                sidecars=sidecars,
-                model=model,
+        for artifact in targets:
+            out_path = output_root / artifact.path
+            if out_path.exists() and not force:
+                totals["skipped"] += 1
+                progress.update(task_id, advance=1, last=f"skip {artifact.id}")
+                continue
+
+            progress.update(task_id, last=f"→ {artifact.type.value}:{artifact.id}")
+            try:
+                result = generate_artifact(
+                    artifact,
+                    plan=plan,
+                    book=book,
+                    sidecars=sidecars,
+                    model=model,
+                )
+            except Exception as exc:
+                totals["failed"] += 1
+                progress.update(
+                    task_id,
+                    advance=1,
+                    last=f"[red]✗ {artifact.id}: {exc}[/red]",
+                )
+                continue
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                result.content if result.content.endswith("\n") else result.content + "\n"
             )
-        except Exception as exc:
-            console.print(f"  [red]✗ failed[/red]: {exc}")
-            totals["failed"] += 1
-            continue
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            result.content if result.content.endswith("\n") else result.content + "\n"
-        )
+            totals["input"] += result.input_tokens
+            totals["output"] += result.output_tokens
+            totals["cache_read"] += result.cache_read_tokens
+            totals["cache_creation"] += result.cache_creation_tokens
+            totals["generated"] += 1
+            progress.update(
+                task_id,
+                advance=1,
+                last=f"✓ {artifact.id} ({len(result.content):,} chars)",
+            )
 
-        totals["input"] += result.input_tokens
-        totals["output"] += result.output_tokens
-        totals["cache_read"] += result.cache_read_tokens
-        totals["cache_creation"] += result.cache_creation_tokens
-        totals["generated"] += 1
-
-        cache_note = ""
-        if result.cache_read_tokens:
-            cache_note = f", [green]{result.cache_read_tokens:,} cached[/green]"
-        console.print(
-            f"  [green]✓[/green] {len(result.content):,} chars "
-            f"([dim]{result.input_tokens:,} in / {result.output_tokens:,} out{cache_note}[/dim])"
-        )
-
+    cost = _sonnet_cost_usd(totals["input"], totals["output"])
     console.print()
     console.print(
         f"[green]✓[/green] reduce stage complete: "
@@ -1009,9 +1032,8 @@ def _generate_artifacts(
         f"{totals['failed']} failed"
     )
     console.print(
-        f"  [dim]{totals['input']:,} input / {totals['output']:,} output / "
-        f"{totals['cache_read']:,} cache-read / "
-        f"{totals['cache_creation']:,} cache-write tokens[/dim]"
+        f"  [dim]{totals['input']:,} in / {totals['output']:,} out / "
+        f"{totals['cache_read']:,} cache-read · ${cost:.2f}[/dim]"
     )
     console.print(f"  plugin tree: [cyan]{output_root}[/cyan]")
 
