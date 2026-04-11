@@ -66,6 +66,7 @@ from franklin.license import logout as license_logout
 from franklin.license import status as license_status
 from franklin.license import whoami as license_whoami
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
+from franklin.picker import BookCandidate, discover_books
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
 from franklin.planner import build_user_prompt as build_plan_prompt
 from franklin.planner import design_plan
@@ -1766,6 +1767,105 @@ def _install_local(plugin_root: Path, plugin_name: str, plugin_version: str) -> 
         "is only active for the lifetime of that `claude` process. For a persistent "
         "install, re-run with --scope user or --scope project.[/dim]"
     )
+
+
+@app.command(name="pick")
+def pick_command(
+    search_dir: Path = typer.Option(
+        Path.home() / "Downloads",
+        "--dir",
+        "-d",
+        help="Directory to scan for .epub and .pdf files",
+    ),
+    runs_base: Path = typer.Option(
+        Path("./runs"),
+        "--runs-base",
+        help="Existing runs directory to cross-reference",
+    ),
+    recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Walk subdirectories"),
+    limit: int = typer.Option(
+        100, "--limit", help="Maximum number of candidates to display", min=1, max=500
+    ),
+) -> None:
+    """Interactive picker for .epub/.pdf files with run-state overlay.
+
+    Scans the given directory (default ~/Downloads) for book files,
+    annotates each with whether a matching run already exists, and
+    prompts for a selection. Picking a file launches ``franklin run``
+    on it with the default options.
+    """
+    candidates = discover_books(
+        search_dir, runs_base=runs_base, recursive=recursive, max_results=limit
+    )
+    if not candidates:
+        console.print(f"[dim]no .epub or .pdf files found under {search_dir}[/dim]")
+        return
+
+    console.print()
+    console.rule(f"[bold]franklin pick[/bold] — {search_dir}")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("File", overflow="fold", style="cyan")
+    table.add_column("Type", justify="center", style="dim")
+    table.add_column("Size", justify="right", style="dim")
+    table.add_column("Run state")
+    for idx, c in enumerate(candidates, start=1):
+        table.add_row(
+            str(idx),
+            c.display_name,
+            c.extension,
+            _format_size(c.size_bytes),
+            _format_run_state(c),
+        )
+    console.print(table)
+    console.print(f"[dim]{len(candidates)} candidate(s) shown[/dim]")
+    console.print()
+
+    choice = typer.prompt("Pick a number to run it (or 0 to cancel)", default=0, type=int)
+    if choice == 0:
+        console.print("[dim]cancelled[/dim]")
+        return
+    if choice < 1 or choice > len(candidates):
+        console.print(f"[red]invalid selection {choice}[/red]")
+        raise typer.Exit(code=1)
+
+    picked = candidates[choice - 1]
+    console.print()
+    console.print(f"[green]→[/green] launching franklin run on [cyan]{picked.path}[/cyan]")
+    console.print()
+    run_pipeline(
+        book_path=picked.path,
+        output=None,
+        force=False,
+        yes=False,
+        estimate=False,
+        clean=False,
+        push=False,
+        repo=None,
+        branch="main",
+        create_pr=False,
+        public=False,
+    )
+
+
+def _format_size(size_bytes: int) -> str:
+    if size_bytes == 0:
+        return "—"
+    for unit in ("B", "KB", "MB", "GB"):
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes = int(size_bytes / 1024)
+    return f"{size_bytes} TB"
+
+
+def _format_run_state(candidate: BookCandidate) -> str:
+    run = candidate.existing_run
+    if run is None:
+        return "[dim]new[/dim]"
+    if run.last_stage == "assemble":
+        grade = run.grade_letter or "—"
+        return f"[green]assembled ({grade})[/green]"
+    return f"[yellow]partial ({run.last_stage or 'empty'})[/yellow]"
 
 
 @app.command(name="doctor")
