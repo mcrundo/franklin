@@ -26,6 +26,7 @@ from franklin.assembler import (
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
+from franklin.installer import InstallError, install_plugin
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
 from franklin.planner import build_user_prompt as build_plan_prompt
@@ -830,6 +831,57 @@ def push_command(
     console.print(f"  pushed branch [cyan]{result.branch}[/cyan] via [dim]{result.backend}[/dim]")
     if result.pr_url:
         console.print(f"  [green]✓[/green] pull request: {result.pr_url}")
+
+
+@app.command(name="install")
+def install_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory with an assembled plugin"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing plugin of the same name"
+    ),
+) -> None:
+    """Install the assembled plugin tree into the local franklin marketplace."""
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(
+            f"[red]error:[/red] no assembled plugin at {plugin_root} — "
+            "run `franklin reduce` and `franklin assemble` first"
+        )
+        raise typer.Exit(code=1)
+
+    console.rule(f"[bold]franklin install[/bold] — {plan.plugin.name}")
+    console.print(f"  plugin root: {plugin_root}")
+    console.print()
+
+    try:
+        result = install_plugin(plugin_root, force=force)
+    except InstallError as exc:
+        console.print(f"[red]✗ install failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    verb = "replaced" if result.replaced else "installed"
+    console.print(
+        f"[green]✓[/green] {verb} [cyan]{result.plugin_name}[/cyan] "
+        f"v{result.plugin_version} at {result.plugin_root}"
+    )
+    console.print()
+    console.print("[bold]Activate in Claude Code:[/bold]")
+    console.print(f"  [cyan]/plugin marketplace add[/cyan] {result.marketplace_root}")
+    console.print(f"  [cyan]/plugin install[/cyan] {result.plugin_name}@franklin")
+    console.print("  [cyan]/reload-plugins[/cyan]")
+    console.print()
+    console.print(
+        "[dim]After the first time, re-running franklin install for any plugin "
+        "only requires the second command — the marketplace is already added.[/dim]"
+    )
 
 
 if __name__ == "__main__":
