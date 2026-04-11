@@ -33,6 +33,7 @@ from franklin.checkpoint import (
 )
 from franklin.classify import classify_chapters
 from franklin.doctor import CheckStatus, has_failures, run_checks
+from franklin.estimate import RunEstimate, estimate_run
 from franklin.grading import RunGrade, grade_run, write_metrics
 from franklin.ingest import UnsupportedFormatError, ingest_book
 from franklin.inspector import (
@@ -125,6 +126,60 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
         return RunDirectory(output)
     slug = slugify(book_path.stem)
     return RunDirectory(Path.cwd() / "runs" / slug)
+
+
+def _print_run_estimate(book_path: Path, *, include_cleanup: bool) -> None:
+    """Parse the book locally and render a Rich table of predicted cost."""
+    console.rule(f"[bold]franklin run --estimate[/bold] — {book_path.name}")
+    console.print("  [dim]parsing book (no LLM calls, no disk writes)…[/dim]")
+    try:
+        book, chapters = ingest_book(book_path)
+    except UnsupportedFormatError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    result: RunEstimate = estimate_run(book, chapters, include_cleanup=include_cleanup)
+
+    console.print()
+    console.print(f"[bold]Book:[/bold]       [cyan]{result.book_title}[/cyan]")
+    console.print(
+        f"[bold]Chapters:[/bold]   {result.content_chapters} content "
+        f"([dim]{result.total_words:,} words[/dim])"
+    )
+    if include_cleanup:
+        console.print("[bold]Options:[/bold]    [yellow]--clean[/yellow] included")
+    console.print()
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Stage")
+    table.add_column("Model", style="dim")
+    table.add_column("Calls", justify="right")
+    table.add_column("Input tok", justify="right")
+    table.add_column("Output tok", justify="right")
+    table.add_column("Cost (USD)", justify="right")
+    for s in result.stages:
+        table.add_row(
+            s.stage,
+            s.model,
+            f"{s.calls:,}",
+            f"{s.input_tokens:,}",
+            f"{s.output_tokens:,}",
+            f"${s.cost_usd:,.2f}",
+        )
+    table.add_row(
+        "[bold]total[/bold]",
+        "",
+        f"{result.total_calls:,}",
+        f"{result.total_input_tokens:,}",
+        f"{result.total_output_tokens:,}",
+        f"[bold]${result.total_cost_usd:,.2f}[/bold]",
+    )
+    console.print(table)
+    console.print()
+    console.print(
+        "[dim]Estimates lean pessimistic; actual runs should land at or below "
+        "this figure. Prompt caching can drive real cost further down.[/dim]"
+    )
 
 
 def _maybe_prompt_resume(run_dir: Path, *, yes: bool) -> None:
@@ -1281,6 +1336,16 @@ def run_pipeline(
         "-y",
         help="Auto-confirm resuming a partial run without prompting",
     ),
+    estimate: bool = typer.Option(
+        False,
+        "--estimate",
+        help="Predict token counts and cost without running the paid stages",
+    ),
+    clean: bool = typer.Option(
+        False,
+        "--clean",
+        help="Include Tier 4 cleanup in the cost estimate (has no effect without --estimate)",
+    ),
     push: bool = typer.Option(
         False, "--push", help="After assemble, push the plugin to GitHub (requires --repo)"
     ),
@@ -1301,6 +1366,10 @@ def run_pipeline(
     _validate_push_flags(push=push, repo=repo, branch=branch, create_pr=create_pr, public=public)
 
     run = _resolve_run_dir(book_path, output)
+
+    if estimate:
+        _print_run_estimate(book_path, include_cleanup=clean)
+        return
 
     if run.root.exists() and not force:
         _maybe_prompt_resume(run.root, yes=yes)
