@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-11
+
+Picker UX overhaul, a pre-map confirmation gate, robustness fixes against LLM drift, and Homebrew distribution.
+
+### Added
+
+#### Picker
+- `franklin pick` truncates long titles to fit the terminal and adds Author and Year columns so identically-titled books disambiguate. Metadata comes from a fast OPF read (zipfile + stdlib XML — no ebooklib, no chapter parsing) with filename parsing as a fallback for `Author - Title (Year)` patterns.
+- Pre-map confirmation gate (Gate 1): after you pick a book, `franklin pick` runs ingest and shows a cost table before any paid stage starts. Options are **Proceed**, **Edit chapter selection**, or **Cancel**. "Edit" opens a multi-select with every content chapter pre-checked (spacebar to toggle, Enter to commit); the gate re-renders the estimate after edits so you see the cost impact before committing. Selection persists to `map_selection.json` and is honored by the map stage on resume.
+
+#### Cost estimates
+- Cost estimates display as a range (`$low - $high`) in both `franklin pick` and `franklin run --estimate`, with a methodology footer explaining the token heuristic, pricing, and which stage is free. The low end assumes prompt caching and realistic output lengths; the high end is the pessimistic worst case.
+
+#### Distribution
+- Homebrew tap support via `bin/bump-homebrew` (prints PyPI sdist URL + sha256 ready to paste into a formula) and `docs/homebrew.md` (one-time tap setup, formula maintenance, and rationale for not targeting homebrew-core yet).
+
+### Changed
+
+- `franklin run` skips the ingest stage when `book.json` already exists (same shape as the existing plan-skip), so the pick-flow gate's ingest isn't duplicated when the full pipeline runs after.
+
 ### Fixed
 
+- `estimate_run` previously zipped chapters against `book.structure.toc` by position, which silently misaligned on partial manifests. It now matches by `chapter_id`.
 - Map and plan stages no longer die on a single stray LLM field. A new shared `validate_with_extra_recovery` helper keeps the outgoing tool schemas strict (`additionalProperties: false`) but, on validation, strips `extra_forbidden` keys and retries — so an LLM slip like `source_quote` on a `Principle` doesn't blow up a chapter's extraction work or wipe out an entire plan call. Stripped fields are logged so drift stays visible.
 - Reduce stage now warns when an artifact's `feeds_from` references chapters or fields that didn't resolve (planner hallucination, partial run, or a chapter the user deselected at Gate 1). Previously the unresolved paths were collected and silently ignored, shipping a degraded artifact without surfacing the missing context.
 
@@ -50,5 +71,6 @@ First public release.
 #### License infrastructure (disabled in v0.1)
 - RS256 JWT license module (`franklin license {login, logout, whoami, status}`) with offline grace window, cached revocations, and bypass env var. Gate code is wired but disabled via `_LICENSE_GATE_ENABLED = False` so v0.1 ships fully free. The flag stays in place for a future paid tier.
 
-[Unreleased]: https://github.com/mcrundo/franklin/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mcrundo/franklin/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mcrundo/franklin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/mcrundo/franklin/releases/tag/v0.1.0
