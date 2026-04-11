@@ -25,6 +25,7 @@ from franklin.assembler import (
 )
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
+from franklin.grading import RunGrade, grade_run, write_metrics
 from franklin.ingest import UnsupportedFormatError, ingest_book
 from franklin.inspector import (
     ChapterInspection,
@@ -803,6 +804,12 @@ def assemble_pipeline(
     else:
         console.print(f"[green]✓[/green] assemble complete: {plugin_root}")
 
+    grade = grade_run(run_dir)
+    metrics_path = write_metrics(run_dir, grade)
+    console.print()
+    _print_grade_card(grade, plan_name=plan.plugin.name)
+    console.print(f"  [dim]metrics: {metrics_path}[/dim]")
+
     if zip_archive:
         archive_path = run.output_dir / f"{plan.plugin.name}.zip"
         package_plugin(plugin_root, archive_path)
@@ -810,6 +817,69 @@ def assemble_pipeline(
         console.print(
             f"[green]✓[/green] packaged [cyan]{archive_path.name}[/cyan] "
             f"({size_kb:,.1f} KB) at {archive_path}"
+        )
+
+
+def _print_grade_card(grade: RunGrade, *, plan_name: str) -> None:
+    """Render the run grade card to the console."""
+    letter_color = {
+        "A": "bold green",
+        "A-": "bold green",
+        "B+": "green",
+        "B": "green",
+        "B-": "yellow",
+        "C+": "yellow",
+        "C": "yellow",
+        "C-": "yellow",
+        "D": "red",
+        "F": "bold red",
+    }.get(grade.letter, "white")
+
+    console.rule(f"[bold]Run Grade: [{letter_color}]{grade.letter}[/{letter_color}][/bold]")
+    console.print(
+        f"  Score:      [cyan]{grade.composite_score:.2f}[/cyan] "
+        f"(structural {grade.structural_average:.2f}, "
+        f"coverage {grade.coverage_fraction:.2f})"
+    )
+    v = grade.validator_totals
+    validator_bits: list[str] = []
+    validator_bits.append(
+        "[green]✓[/green] links" if v.broken_links == 0 else f"[red]✗[/red] {v.broken_links} links"
+    )
+    validator_bits.append(
+        "[green]✓[/green] templates"
+        if v.template_leaks == 0
+        else f"[red]✗[/red] {v.template_leaks} leaks"
+    )
+    validator_bits.append(
+        "[green]✓[/green] frontmatter"
+        if v.frontmatter_issues == 0
+        else f"[red]✗[/red] {v.frontmatter_issues} frontmatter"
+    )
+    console.print(f"  Validation: {'  '.join(validator_bits)}")
+    console.print(
+        f"  Artifacts:  {len(grade.artifact_grades)} graded "
+        f"across {v.markdown_files} markdown files"
+    )
+    if grade.warnings:
+        console.print(f"  Warnings:   [yellow]{len(grade.warnings)}[/yellow]")
+        for w in grade.warnings:
+            console.print(f"    - {w}")
+    if grade.failed_stages:
+        console.print(f"  [red]Failed stages:[/red] {', '.join(grade.failed_stages)}")
+
+    lowest = grade.lowest_graded
+    if lowest and lowest[0].score < 1.0:
+        console.print()
+        console.print("  [bold]Lowest-graded artifacts:[/bold]")
+        for g in lowest:
+            console.print(f"    - {g.path:<42} [dim]{g.letter}[/dim] ({g.score:.2f})")
+            for failed in g.failed_checks[:3]:
+                console.print(f"        [dim]- missed: {failed}[/dim]")
+        worst = lowest[0]
+        console.print()
+        console.print(
+            f"  Next: [cyan]franklin reduce <run> --artifact {worst.artifact_id} --force[/cyan]"
         )
 
 
