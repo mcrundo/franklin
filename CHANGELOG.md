@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Map stage no longer dies on a single stray LLM field. The `ChapterExtraction` validator stays strict on required fields and types, but now strips `extra_forbidden` keys (and logs them) before retrying — so an LLM slip like `source_quote` on a `Principle` doesn't blow up an entire chapter's extraction work.
+
 ## [0.1.0] - 2026-04-11
 
 First public release.

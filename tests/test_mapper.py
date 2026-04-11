@@ -177,6 +177,78 @@ def test_extract_chapter_rejects_invalid_payload() -> None:
         extract_chapter(_book(), _chapter(), client=client)
 
 
+def test_extract_chapter_recovers_from_stray_extra_field(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """LLMs sometimes slip an extra field onto a sub-object (e.g. source_quote
+    on a Principle, generalized from Concept). We keep the schema strict
+    going out, but strip stray extras coming back so one drifted field
+    doesn't kill the whole chapter."""
+    payload = {
+        "summary": "A chapter about pragmatism.",
+        "principles": [
+            {
+                "id": "ch03.principle.dry",
+                "statement": "Don't Repeat Yourself",
+                "rationale": "Duplication makes change expensive",
+                "source_location": "ch03 §1",
+                "source_quote": "Every piece of knowledge must have a single representation",
+            },
+        ],
+    }
+    client = _FakeClient(payload)
+
+    with caplog.at_level("WARNING", logger="franklin.mapper.extractor"):
+        sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
+
+    assert sidecar.summary == "A chapter about pragmatism."
+    assert len(sidecar.principles) == 1
+    assert sidecar.principles[0].statement == "Don't Repeat Yourself"
+    # The stripped field is logged so drift is visible in run logs.
+    assert any("source_quote" in r.message for r in caplog.records)
+
+
+def test_extract_chapter_recovers_from_multiple_stray_extras() -> None:
+    """Stripping handles multiple extras across different list items."""
+    payload = {
+        "summary": "Multi-extra payload.",
+        "principles": [
+            {
+                "id": "p1",
+                "statement": "First",
+                "source_location": "§1",
+                "bogus_field": "x",
+            },
+            {
+                "id": "p2",
+                "statement": "Second",
+                "source_location": "§2",
+                "another_bogus": "y",
+            },
+        ],
+    }
+    client = _FakeClient(payload)
+    sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
+    assert [p.id for p in sidecar.principles] == ["p1", "p2"]
+
+
+def test_extract_chapter_still_rejects_non_extra_errors() -> None:
+    """Missing required fields are NOT recoverable — only stray extras are."""
+    payload = {
+        "summary": "Missing required subfield.",
+        "principles": [
+            {
+                "id": "p1",
+                # missing required `statement` and `source_location`
+                "rogue": "still bad",
+            }
+        ],
+    }
+    client = _FakeClient(payload)
+    with pytest.raises(RuntimeError, match="invalid payload"):
+        extract_chapter(_book(), _chapter(), client=client)
+
+
 # ---------------------------------------------------------------------------
 # Live API test — runs only when ANTHROPIC_API_KEY is set.
 # Gated further by FRANKLIN_LIVE_API=1 to avoid surprise charges.
