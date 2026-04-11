@@ -271,7 +271,7 @@ def test_install_command_proceeds_with_valid_license(
         )
     )
     with patch("franklin.cli.install_plugin", fake_install):
-        install_command(run_dir=run_dir, force=False)
+        install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_called_once()
 
@@ -285,7 +285,7 @@ def test_install_command_blocks_with_missing_license(
         patch("franklin.cli.install_plugin", fake_install),
         pytest.raises(typer.Exit) as exc_info,
     ):
-        install_command(run_dir=run_dir, force=False)
+        install_command(run_dir=run_dir, scope="user", force=False)
 
     assert exc_info.value.exit_code == 1
     fake_install.assert_not_called()
@@ -303,7 +303,7 @@ def test_install_command_blocks_when_feature_not_granted(
 
     fake_install = MagicMock()
     with patch("franklin.cli.install_plugin", fake_install), pytest.raises(typer.Exit):
-        install_command(run_dir=run_dir, force=False)
+        install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_not_called()
     captured = capsys.readouterr()
@@ -327,7 +327,7 @@ def test_install_command_proceeds_when_bypass_active(
         )
     )
     with patch("franklin.cli.install_plugin", fake_install):
-        install_command(run_dir=run_dir, force=False)
+        install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_called_once()
 

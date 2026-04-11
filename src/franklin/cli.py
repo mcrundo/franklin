@@ -936,17 +936,45 @@ def push_command(
         console.print(f"  [green]✓[/green] pull request: {result.pr_url}")
 
 
+_VALID_INSTALL_SCOPES: tuple[str, ...] = ("user", "project", "local")
+
+
 @app.command(name="install")
 def install_command(
     run_dir: Path = typer.Argument(
         ..., exists=True, file_okay=False, help="Run directory with an assembled plugin"
     ),
+    scope: str = typer.Option(
+        "user",
+        "--scope",
+        help="Install scope: user (default), project, or local",
+    ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing plugin of the same name"
     ),
 ) -> None:
-    """Install the assembled plugin tree into the local franklin marketplace."""
+    """Install the assembled plugin tree into Claude Code.
+
+    - **user** (default): copy into the franklin-owned local marketplace at
+      ~/.franklin/marketplace/<plugin-name>/, then activate via
+      `/plugin marketplace add` + `/plugin install`. Persistent, available
+      in every Claude Code session.
+    - **project**: same install as user scope, but the activation sequence
+      records the plugin in the current project's `.claude/settings.json`
+      so it loads only when Claude Code is run from that project root.
+      Git-committed and team-shared.
+    - **local**: no filesystem writes. Prints the `claude --plugin-dir`
+      command for a single-session dev load against the assembled tree.
+      `--force` is ignored since nothing is written.
+    """
     _gate_pro_feature("install", "install")
+
+    if scope not in _VALID_INSTALL_SCOPES:
+        console.print(
+            f"[red]error:[/red] invalid --scope {scope!r} "
+            f"(valid: {', '.join(_VALID_INSTALL_SCOPES)})"
+        )
+        raise typer.Exit(code=2)
 
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
@@ -962,9 +990,13 @@ def install_command(
         )
         raise typer.Exit(code=1)
 
-    console.rule(f"[bold]franklin install[/bold] — {plan.plugin.name}")
+    console.rule(f"[bold]franklin install[/bold] — {plan.plugin.name} ({scope})")
     console.print(f"  plugin root: {plugin_root}")
     console.print()
+
+    if scope == "local":
+        _install_local(plugin_root, plan.plugin.name, plan.plugin.version)
+        return
 
     try:
         result = install_plugin(plugin_root, force=force)
@@ -978,14 +1010,43 @@ def install_command(
         f"v{result.plugin_version} at {result.plugin_root}"
     )
     console.print()
+
+    install_suffix = " --scope project" if scope == "project" else ""
     console.print("[bold]Activate in Claude Code:[/bold]")
     console.print(f"  [cyan]/plugin marketplace add[/cyan] {result.marketplace_root}")
-    console.print(f"  [cyan]/plugin install[/cyan] {result.plugin_name}@franklin")
+    console.print(f"  [cyan]/plugin install[/cyan] {result.plugin_name}@franklin{install_suffix}")
     console.print("  [cyan]/reload-plugins[/cyan]")
     console.print()
+
+    if scope == "project":
+        console.print(
+            "[dim]Project scope records the install in the current project's "
+            ".claude/settings.json — run the commands above from a Claude Code "
+            "session launched in that project.[/dim]"
+        )
+    else:
+        console.print(
+            "[dim]After the first time, re-running franklin install for any plugin "
+            "only requires the second command — the marketplace is already added.[/dim]"
+        )
+
+
+def _install_local(plugin_root: Path, plugin_name: str, plugin_version: str) -> None:
+    """Handle the --scope local branch: print only, no filesystem writes."""
+    absolute = plugin_root.resolve()
     console.print(
-        "[dim]After the first time, re-running franklin install for any plugin "
-        "only requires the second command — the marketplace is already added.[/dim]"
+        f"[green]✓[/green] [cyan]{plugin_name}[/cyan] v{plugin_version} "
+        "is ready for session-scoped loading"
+    )
+    console.print(f"  plugin tree: {absolute}")
+    console.print()
+    console.print("[bold]Launch Claude Code with the plugin loaded for one session:[/bold]")
+    console.print(f"  [cyan]claude --plugin-dir[/cyan] {absolute}")
+    console.print()
+    console.print(
+        "[dim]Local scope is ephemeral — nothing was written to disk and the plugin "
+        "is only active for the lifetime of that `claude` process. For a persistent "
+        "install, re-run with --scope user or --scope project.[/dim]"
     )
 
 
