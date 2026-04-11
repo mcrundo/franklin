@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from franklin.assembler import write_plugin_manifest
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
@@ -553,6 +554,47 @@ def _generate_artifacts(
         f"{totals['cache_creation']:,} cache-write tokens[/dim]"
     )
     console.print(f"  plugin tree: [cyan]{output_root}[/cyan]")
+
+
+@app.command(name="assemble")
+def assemble_pipeline(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory with a generated plugin"
+    ),
+) -> None:
+    """Assemble the generated plugin tree: write plugin.json and report."""
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(
+            f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first"
+        )
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(
+            f"[red]error:[/red] no generated plugin at {plugin_root} — "
+            "run `franklin reduce` first"
+        )
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold]Assembling[/bold] [cyan]{plan.plugin.name}[/cyan]")
+    console.print(f"  plugin root: {plugin_root}")
+    console.print()
+
+    manifest_path = write_plugin_manifest(plugin_root, plan.plugin)
+    console.print(
+        f"[green]✓[/green] wrote {manifest_path.relative_to(plugin_root)}"
+    )
+
+    files = sorted(p for p in plugin_root.rglob("*") if p.is_file())
+    markdown_files = [p for p in files if p.suffix == ".md"]
+    console.print(
+        f"  {len(files)} files total ({len(markdown_files)} markdown)"
+    )
+    console.print()
+    console.print(f"[green]✓[/green] assemble complete: {plugin_root}")
 
 
 @app.command(name="run")
