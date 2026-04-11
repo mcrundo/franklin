@@ -2050,6 +2050,72 @@ def pick_command(
             console.print(f"  [dim]• {d}[/dim]")
         console.print()
 
+    picked = _prompt_pick_candidate(candidates)
+    if picked is None:
+        console.print("[dim]cancelled[/dim]")
+        return
+    console.print()
+    console.print(f"[green]→[/green] launching franklin run on [cyan]{picked.path}[/cyan]")
+    console.print()
+    run_pipeline(
+        book_path=picked.path,
+        output=None,
+        force=False,
+        yes=False,
+        estimate=False,
+        review=False,
+        clean=False,
+        push=False,
+        repo=None,
+        branch="main",
+        create_pr=False,
+        public=False,
+    )
+
+
+def _prompt_pick_candidate(
+    candidates: list[BookCandidate],
+) -> BookCandidate | None:
+    """Show an arrow-key picklist when interactive, fall back to a table otherwise.
+
+    questionary gives us arrow + type-to-filter + Enter in the interactive
+    branch; the fallback branch uses a Rich table and a numbered prompt so
+    scripted use (redirected stdin, CI, etc.) still works without a TTY.
+    """
+    import sys
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return _questionary_pick(candidates)
+    return _fallback_numbered_pick(candidates)
+
+
+def _questionary_pick(candidates: list[BookCandidate]) -> BookCandidate | None:
+    import questionary
+
+    max_name = max((len(c.display_name) for c in candidates), default=20)
+    choices: list[Any] = []
+    for c in candidates:
+        title = (
+            f"{c.display_name.ljust(max_name)}  "
+            f"{c.extension:<4}  "
+            f"{_format_size_plain(c.size_bytes):>8}  "
+            f"{_format_run_state_plain(c)}"
+        )
+        choices.append(questionary.Choice(title=title, value=c))
+    choices.append(questionary.Choice(title="(cancel)", value=None))
+
+    answer: BookCandidate | None = questionary.select(
+        "Pick a book (type to filter, ↑↓ to move, ↵ to run)",
+        choices=choices,
+        use_search_filter=True,
+        use_jk_keys=False,
+    ).ask()
+    return answer  # None if user hit Ctrl-C or selected (cancel)
+
+
+def _fallback_numbered_pick(
+    candidates: list[BookCandidate],
+) -> BookCandidate | None:
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", justify="right", style="dim")
     table.add_column("File", overflow="fold", style="cyan")
@@ -2068,32 +2134,37 @@ def pick_command(
     console.print(f"[dim]{len(candidates)} candidate(s) shown[/dim]")
     console.print()
 
-    choice = typer.prompt("Pick a number to run it (or 0 to cancel)", default=0, type=int)
+    choice: int = typer.prompt("Pick a number to run it (or 0 to cancel)", default=0, type=int)
     if choice == 0:
-        console.print("[dim]cancelled[/dim]")
-        return
+        return None
     if choice < 1 or choice > len(candidates):
         console.print(f"[red]invalid selection {choice}[/red]")
         raise typer.Exit(code=1)
+    picked: BookCandidate = candidates[choice - 1]
+    return picked
 
-    picked = candidates[choice - 1]
-    console.print()
-    console.print(f"[green]→[/green] launching franklin run on [cyan]{picked.path}[/cyan]")
-    console.print()
-    run_pipeline(
-        book_path=picked.path,
-        output=None,
-        force=False,
-        yes=False,
-        estimate=False,
-        review=False,
-        clean=False,
-        push=False,
-        repo=None,
-        branch="main",
-        create_pr=False,
-        public=False,
-    )
+
+def _format_size_plain(size_bytes: int) -> str:
+    """Size formatter for questionary choices (no Rich markup)."""
+    if size_bytes == 0:
+        return "—"
+    size_f = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size_f < 1024:
+            return f"{size_f:.1f} {unit}"
+        size_f /= 1024
+    return f"{size_f:.1f} TB"
+
+
+def _format_run_state_plain(candidate: BookCandidate) -> str:
+    """Plain-text run state for questionary choices."""
+    run = candidate.existing_run
+    if run is None:
+        return "new"
+    if run.last_stage == "assemble":
+        grade = run.grade_letter or "—"
+        return f"✓ assembled ({grade})"
+    return f"⏳ partial ({run.last_stage or 'empty'})"
 
 
 def _resolve_pick_dirs(explicit: list[Path] | None, *, scan_home: bool) -> list[Path]:
