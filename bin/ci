@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Run the same checks the GitHub Actions CI workflow runs.
+#
+# Mirrors .github/workflows/ci.yml so you can catch failures locally
+# before pushing. Exits non-zero on the first failed step.
+#
+# Usage:
+#   bin/ci              # run every check
+#   bin/ci --fix        # auto-fix ruff issues and format before checking
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [[ "${1:-}" == "--fix" ]]; then
+    echo "▶ ruff check --fix"
+    uv run ruff check . --fix
+    echo "▶ ruff format"
+    uv run ruff format .
+else
+    echo "▶ ruff check"
+    uv run ruff check .
+    echo "▶ ruff format --check"
+    uv run ruff format --check .
+fi
+
+echo "▶ mypy"
+uv run mypy
+
+echo "▶ pytest"
+uv run pytest -q
+
+echo
+echo "✓ all checks passed"

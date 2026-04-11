@@ -54,9 +54,7 @@ def apply_omissions(plan: PlanManifest, omit_ids: list[str]) -> ReviewResult:
         update={
             "artifacts": kept,
             "estimated_reduce_calls": len(kept),
-            "estimated_total_output_tokens": sum(
-                a.estimated_output_tokens for a in kept
-            ),
+            "estimated_total_output_tokens": sum(a.estimated_output_tokens for a in kept),
         }
     )
     return ReviewResult(plan=new_plan, omitted=omitted)
