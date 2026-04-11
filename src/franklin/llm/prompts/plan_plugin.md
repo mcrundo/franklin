@@ -21,9 +21,22 @@ plugin-name/
 
 - **reference** — A markdown file under `skills/<skill>/references/`. Organize in subdirectories by category. Standard categories are `core/` (foundational principles and architecture), `patterns/` (named design patterns), `topics/` (subject-specific deep dives like authorization or testing), and `examples/` (worked end-to-end examples). **You are free to invent additional category directories** when the book's material genuinely calls for one — a book that covers specific gems can have a `gems/` directory, a book with a rich anti-patterns chapter can have a standalone `anti-patterns.md` or an `anti-patterns/` directory, and so on. The goal is a tree that mirrors the book's own mental model.
 
-- **command** — A slash command under `commands/<name>.md`. Propose one when the book describes a **concrete, repeatable workflow** that a reader would naturally want to invoke by name. Good candidates come directly from `actionable_workflows` entries in the sidecars. Bad candidates are vague "review my code" commands without a specific procedure.
+- **command** — A slash command under `commands/<name>.md`. Propose one when the book describes a **concrete, repeatable workflow** that a reader would naturally want to invoke by name. Good candidates come directly from `actionable_workflows` entries in the sidecars — look for workflows with a clear trigger condition and an ordered sequence of steps.
 
-- **agent** — A subagent under `agents/<name>.md`. Propose one when the book supports a **delegation pattern**. Typical cases: a *reviewer* agent that applies the book's rules and anti-patterns to code the user provides; a *planner* agent that helps sequence a gradual adoption or refactoring. Only propose an agent if the book has enough material (rules, anti-patterns, workflows) to make its responses substantive.
+  Commands are cheap to add and high-leverage: a developer with a command for a common task has a smoother experience than one who has to re-explain the procedure every time. **When the sidecars contain many actionable_workflows (more than 20 across the whole book), that is a strong signal the book is workflow-heavy and commands should be harvested generously rather than curated sparingly.** As a rough calibration, a book with around 40 workflows should produce on the order of 5–8 commands, not 1 or 2. Under-harvesting commands is the more common failure mode than over-harvesting them.
+
+  Bad candidates are vague commands without a specific procedure ("review my code"), or commands that exactly duplicate what a subagent already handles better.
+
+- **agent** — A subagent under `agents/<name>.md`. Propose one when the book supports a **delegation pattern** — a task the reader wants to hand off to an isolated context rather than ask inline. The two common shapes:
+
+  - **Reviewer** — applies the book's rules and anti-patterns to code the user provides. Powered primarily by `anti_patterns`, `rules`, and `decision_rules` in the sidecars. Answers the question *"what's wrong with this code?"*
+  - **Planner / Advisor** — sequences a multi-step adoption, refactoring, or migration. Powered primarily by `actionable_workflows` in the sidecars. Answers the question *"given this codebase and where I want to end up, what do I do next?"*
+
+  These are genuinely distinct use cases. A reviewer tells you what's wrong; a planner tells you what to do about it. **If the book supports both — a rich anti-pattern catalog AND many actionable workflows — propose them as two separate agents, not one combined agent.** Bundling planner behavior into a reviewer loses the distinction and leaves the planning use case unserved.
+
+  Books that teach **gradual adoption, progressive extraction, or staged migration** as their methodology are particularly strong candidates for a dedicated planner agent, because the book's whole thesis *is* a planning task. If the sidecars show the book emphasizing "don't start with abstractions, extract as you grow" or equivalent gradual-adoption language, that is a direct signal to propose a planner agent alongside any reviewer.
+
+  Only propose an agent when the sidecars provide substantive material; empty or boilerplate agents are worse than none.
 
 ## Your Task
 
@@ -48,7 +61,7 @@ Read the distilled book below in full, then call the `save_plan_proposal` tool w
 2. **Only propose artifacts the sidecars support.** If the book has no anti-patterns, don't propose a reviewer agent. If there are no actionable workflows, don't propose commands. Empty or generic proposals are worse than skipping.
 3. **Every `feeds_from` must reference real sidecar data.** Do not invent chapter IDs or categories.
 4. **Keep the skill file a router, not a textbook.** The SKILL.md should be small (2000–3500 output tokens) and mostly tables and links.
-5. **Bias toward fewer, higher-quality artifacts.** 15 well-designed references beat 40 bloated ones. Combining related concepts into one reference file is often the right call.
+5. **Bias toward fewer, higher-quality reference files.** 15 well-designed references beat 40 bloated ones. Combining related concepts into one reference file is often the right call. *This bias applies to reference files only — it does NOT apply to commands, which should be harvested generously from actionable workflows, or to agents, which should be split by use case when the material supports both a reviewer and a planner.*
 6. **Invent category directories freely** when the book's material genuinely calls for one, but do not invent categories to pad the output.
 7. **Use lowercase-kebab-case** for file names, directory names, and artifact IDs.
 
