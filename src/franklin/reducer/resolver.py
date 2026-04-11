@@ -46,16 +46,26 @@ _BOOK_FIELDS: frozenset[str] = frozenset(
 class ResolvedContext:
     """Filtered sidecar and book data for a single artifact generator.
 
-    Carries both a ready-to-inject markdown string (for the prompt) and the
-    structured Pydantic objects (for generators that want to walk the data
-    directly). `unresolved` surfaces any feeds_from paths that couldn't be
-    walked so callers can warn or log.
+    Carries ready-to-inject markdown for both halves of the prompt — the
+    book-level header (title, authors, any explicitly requested book
+    fields) and the per-chapter filtered content — plus the structured
+    Pydantic objects for generators that want to walk the data directly.
+    `unresolved` surfaces any feeds_from paths that couldn't be walked
+    so callers can warn or log.
     """
 
-    markdown: str
+    book_markdown: str
+    chapters_markdown: str
     chapter_items: dict[str, dict[str, list[Any]]] = field(default_factory=dict)
     book_fields: dict[str, Any] = field(default_factory=dict)
     unresolved: list[str] = field(default_factory=list)
+    markdown: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.chapters_markdown:
+            self.markdown = f"{self.book_markdown}\n\n{self.chapters_markdown}".strip()
+        else:
+            self.markdown = self.book_markdown.strip()
 
 
 def resolve_feeds(
@@ -78,9 +88,11 @@ def resolve_feeds(
     for path in feeds_from:
         _resolve_one(path, book, sidecars, chapter_items, book_out, unresolved)
 
-    markdown = _render_markdown(book, sidecars, chapter_items, book_out)
+    book_md = _render_book_header(book, book_out)
+    chapters_md = _render_chapter_sections(sidecars, chapter_items)
     return ResolvedContext(
-        markdown=markdown,
+        book_markdown=book_md,
+        chapters_markdown=chapters_md,
         chapter_items=chapter_items,
         book_fields=book_out,
         unresolved=unresolved,
@@ -141,11 +153,8 @@ def _resolve_one(
 # ---------------------------------------------------------------------------
 
 
-def _render_markdown(
-    book: BookManifest,
-    sidecars: dict[str, ChapterSidecar],
-    chapter_items: dict[str, dict[str, list[Any]]],
-    book_fields: dict[str, Any],
+def _render_book_header(
+    book: BookManifest, book_fields: dict[str, Any]
 ) -> str:
     parts: list[str] = [f"# {book.metadata.title}"]
     if book.metadata.authors:
@@ -171,6 +180,14 @@ def _render_markdown(
             parts.append(f"- **{term}**: {definition}")
         parts.append("")
 
+    return "\n".join(parts).rstrip()
+
+
+def _render_chapter_sections(
+    sidecars: dict[str, ChapterSidecar],
+    chapter_items: dict[str, dict[str, list[Any]]],
+) -> str:
+    parts: list[str] = []
     for chapter_id in sorted(chapter_items):
         sidecar = sidecars[chapter_id]
         categories = chapter_items[chapter_id]
@@ -195,7 +212,7 @@ def _render_markdown(
             if cat_name != "code_examples":
                 parts.append("")
 
-    return "\n".join(parts)
+    return "\n".join(parts).rstrip()
 
 
 def _render_item(category: str, item: Any) -> str:
