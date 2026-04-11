@@ -6,7 +6,7 @@ Franklin reads an EPUB or PDF and produces a full Claude Code plugin — SKILL, 
 
 ## Install
 
-Once published to PyPI, the easiest install is via [`uv`](https://docs.astral.sh/uv/) or `pipx`:
+The easiest install is via [`uv`](https://docs.astral.sh/uv/) or `pipx`:
 
 ```bash
 uv tool install franklin-book
@@ -14,7 +14,14 @@ uv tool install franklin-book
 pipx install franklin-book
 ```
 
-Both drop a `franklin` command onto your PATH. (The distribution is called `franklin-book` on PyPI because `franklin` was already taken; the CLI you actually type is still `franklin`.)
+On macOS / Linux you can also install via Homebrew:
+
+```bash
+brew tap mcrundo/franklin
+brew install franklin-book
+```
+
+All three drop a `franklin` command onto your PATH. (The distribution is called `franklin-book` on PyPI and Homebrew because `franklin` was already taken; the CLI you actually type is still `franklin`. See `docs/homebrew.md` for tap maintenance details.)
 
 For development from a clone:
 
@@ -50,7 +57,9 @@ Use whichever fits your workflow. You do not need to configure anything in Frank
 ## The happy path
 
 ```bash
-# Optional: pick a book interactively from ~/Downloads
+# Pick a book interactively (scans ~/Books, ~/Media, ~/Downloads, ~/Documents
+# by default; override with --dir or FRANKLIN_BOOKS_DIR). Truncates long
+# titles, shows author + year, and marks anything you've already processed.
 uv run franklin pick
 
 # Or point directly at a file
@@ -62,6 +71,8 @@ uv run franklin run path/to/book.epub --estimate
 # Want a pause between plan and reduce to prune artifacts?
 uv run franklin run path/to/book.epub --review
 ```
+
+`franklin pick` runs ingest, then shows a **pre-map cost gate**: a per-stage cost table with a low-high range, then a **Proceed / Edit chapter selection / Cancel** prompt. "Edit" opens a multi-select where every content chapter is pre-checked — spacebar to skip the chapters you don't want to spend tokens on, Enter to commit. The selection persists across resumes via `map_selection.json`.
 
 `franklin run` chains the five pipeline stages end-to-end (`ingest → map → plan → reduce → assemble`) and ends with a grade card plus a tailored "next steps" block. It's resume-safe: re-running over an existing run directory detects which stages are done and prompts to continue from the first incomplete one. Use `--force` to restart from scratch, `--yes` to auto-confirm prompts in scripts.
 
@@ -121,10 +132,12 @@ The tradeoff is that Opus's advisory call is a single point of failure: if the p
 
 ## Cost and performance
 
-- **`franklin run --estimate`** predicts per-stage token counts and dollar cost from a parsed `BookManifest` before any paid calls. Lean pessimistic — real runs should come in at or below the estimate.
+- **`franklin run --estimate`** predicts per-stage token counts and dollar cost from a parsed `BookManifest` before any paid calls. Displayed as a `$low - $high` range: the high end is the pessimistic worst case (`~1.3 tokens/word x chapter text + per-stage overhead`), the low end discounts for prompt caching and realistic output lengths. Real runs almost always land inside the band.
+- **`franklin pick` shows the same estimate** as a pre-map gate so you can deselect expensive chapters before paying for them — see "happy path" above.
 - **Tier 4 cleanup** uses `AsyncAnthropic` with a bounded semaphore (`--clean-concurrency=8` default). A 29-chapter book drops from ~50 minutes sequential to ~6 minutes.
 - **Resume-on-disk** means a flaky network or a burned credit card never costs you more than the stage that was in flight. Re-run the same command; Franklin picks up from `book.json`, `chapters/`, `plan.json`, or `output/` depending on what already exists.
 - **Per-chapter failures are non-fatal** during cleanup and map; the original Tier 2 output is kept and reported in the summary.
+- **LLM drift is tolerated**, not fatal. If a tool-use response slips a stray field onto a sub-object, the validator strips it and logs a warning instead of killing the whole stage. Missing required fields and type errors still raise.
 
 ## Run directory layout
 
