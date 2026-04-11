@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -23,7 +24,7 @@ from franklin.assembler import (
     validate_links,
     write_plugin_manifest,
 )
-from franklin.checkpoint import RunDirectory, slugify
+from franklin.checkpoint import RunDirectory, RunSummary, list_runs, slugify
 from franklin.classify import classify_chapters
 from franklin.grading import RunGrade, grade_run, write_metrics
 from franklin.ingest import UnsupportedFormatError, ingest_book
@@ -75,6 +76,12 @@ license_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(license_app, name="license")
+runs_app = typer.Typer(
+    name="runs",
+    help="Inspect past pipeline runs.",
+    no_args_is_help=True,
+)
+app.add_typer(runs_app, name="runs")
 console = Console()
 
 _PRICING_URL = "https://franklin.example.com/pricing"
@@ -1528,6 +1535,91 @@ def _install_local(plugin_root: Path, plugin_name: str, plugin_version: str) -> 
         "is only active for the lifetime of that `claude` process. For a persistent "
         "install, re-run with --scope user or --scope project.[/dim]"
     )
+
+
+@runs_app.command("list")
+def runs_list_command(
+    base: Path = typer.Option(
+        Path("./runs"),
+        "--base",
+        "-b",
+        help="Base directory to scan for runs",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit the run list as JSON"),
+) -> None:
+    """List every run directory under ./runs/ with grade and last stage."""
+    summaries = list_runs(base)
+
+    if output_json:
+        import json as _json
+
+        payload = [_summary_to_dict(s) for s in summaries]
+        console.print_json(_json.dumps(payload, default=str))
+        return
+
+    if not summaries:
+        console.print(f"[dim]no runs found under {base}[/dim]")
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Slug", style="cyan", overflow="fold")
+    table.add_column("Title", overflow="fold")
+    table.add_column("Ingested", style="dim")
+    table.add_column("Stage")
+    table.add_column("Artifacts", justify="right")
+    table.add_column("Grade", justify="center")
+    for s in summaries:
+        table.add_row(
+            s.slug,
+            s.title or "[dim](unknown)[/dim]",
+            s.ingested_at.strftime("%Y-%m-%d") if s.ingested_at else "—",
+            _format_stage(s.last_stage),
+            str(s.artifact_count) if s.artifact_count is not None else "—",
+            _format_grade(s.grade_letter),
+        )
+    console.print(table)
+    console.print(f"[dim]{len(summaries)} run(s) under {base}[/dim]")
+
+
+def _summary_to_dict(s: RunSummary) -> dict[str, Any]:
+    return {
+        "slug": s.slug,
+        "path": str(s.path),
+        "title": s.title,
+        "authors": s.authors,
+        "ingested_at": s.ingested_at.isoformat() if s.ingested_at else None,
+        "stages_done": s.stages_done,
+        "last_stage": s.last_stage,
+        "artifact_count": s.artifact_count,
+        "grade_letter": s.grade_letter,
+        "grade_score": s.grade_score,
+    }
+
+
+def _format_stage(last_stage: str | None) -> str:
+    if last_stage is None:
+        return "[dim]—[/dim]"
+    if last_stage == "assemble":
+        return "[green]assemble ✓[/green]"
+    return f"[yellow]{last_stage}[/yellow]"
+
+
+def _format_grade(letter: str | None) -> str:
+    if letter is None:
+        return "[dim]—[/dim]"
+    color = {
+        "A": "bold green",
+        "A-": "bold green",
+        "B+": "green",
+        "B": "green",
+        "B-": "yellow",
+        "C+": "yellow",
+        "C": "yellow",
+        "C-": "yellow",
+        "D": "red",
+        "F": "bold red",
+    }.get(letter, "white")
+    return f"[{color}]{letter}[/{color}]"
 
 
 @license_app.command("login")
