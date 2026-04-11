@@ -125,6 +125,4 @@ def call_tool(
                 ),
             )
 
-    raise RuntimeError(
-        f"Expected tool_use block calling {tool_name!r}, got none in response"
-    )
+    raise RuntimeError(f"Expected tool_use block calling {tool_name!r}, got none in response")

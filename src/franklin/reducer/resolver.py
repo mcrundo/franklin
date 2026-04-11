@@ -153,9 +153,7 @@ def _resolve_one(
 # ---------------------------------------------------------------------------
 
 
-def _render_book_header(
-    book: BookManifest, book_fields: dict[str, Any]
-) -> str:
+def _render_book_header(book: BookManifest, book_fields: dict[str, Any]) -> str:
     parts: list[str] = [f"# {book.metadata.title}"]
     if book.metadata.authors:
         parts.append(f"**Authors:** {', '.join(book.metadata.authors)}")
@@ -163,9 +161,7 @@ def _render_book_header(
 
     if "classification" in book_fields and book.classification is not None:
         c = book.classification
-        parts.append(
-            f"**Classification.** {c.primary_intent} (audience: {c.audience})"
-        )
+        parts.append(f"**Classification.** {c.primary_intent} (audience: {c.audience})")
         parts.append("")
 
     if "cross_chapter_themes" in book_fields and book.cross_chapter_themes:
@@ -224,20 +220,12 @@ def _render_item(category: str, item: Any) -> str:
 
     if category == "principles":
         rationale = f" _({item.rationale})_" if item.rationale else ""
-        return (
-            f"- `{item.id}` {item.statement}{rationale} "
-            f"_source: {item.source_location}_"
-        )
+        return f"- `{item.id}` {item.statement}{rationale} _source: {item.source_location}_"
 
     if category == "rules":
         applies = f" (applies when: {item.applies_when})" if item.applies_when else ""
-        exceptions = (
-            f" exceptions: {'; '.join(item.exceptions)}" if item.exceptions else ""
-        )
-        return (
-            f"- `{item.id}` {item.rule}{applies}{exceptions} "
-            f"_source: {item.source_location}_"
-        )
+        exceptions = f" exceptions: {'; '.join(item.exceptions)}" if item.exceptions else ""
+        return f"- `{item.id}` {item.rule}{applies}{exceptions} _source: {item.source_location}_"
 
     if category == "anti_patterns":
         lines = [f"- `{item.id}` **{item.name}**"]

@@ -125,9 +125,7 @@ def _sidecar(chapter_id: str) -> ChapterSidecar:
 def test_resolves_whole_category_path() -> None:
     book = _book()
     sidecars = {"ch04": _sidecar("ch04"), "ch07": _sidecar("ch07")}
-    ctx = resolve_feeds(
-        ["ch04.anti_patterns"], book=book, sidecars=sidecars
-    )
+    ctx = resolve_feeds(["ch04.anti_patterns"], book=book, sidecars=sidecars)
     assert ctx.unresolved == []
     assert "ch04" in ctx.chapter_items
     assert "anti_patterns" in ctx.chapter_items["ch04"]
@@ -191,9 +189,7 @@ def test_unresolved_paths_collected_not_raised() -> None:
 
 def test_markdown_contains_book_header_even_without_book_paths() -> None:
     book = _book()
-    ctx = resolve_feeds(
-        ["ch04.concepts"], book=book, sidecars={"ch04": _sidecar("ch04")}
-    )
+    ctx = resolve_feeds(["ch04.concepts"], book=book, sidecars={"ch04": _sidecar("ch04")})
     assert ctx.markdown.startswith("# Layered Design")
     assert "Vladimir Dementyev" in ctx.markdown
 

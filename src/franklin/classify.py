@@ -118,9 +118,7 @@ _STRONG_TITLE_RULES: tuple[tuple[re.Pattern[str], ChapterKind, str], ...] = (
 )
 
 
-def classify_chapter(
-    chapter: NormalizedChapter, *, total_chapters: int
-) -> ClassificationResult:
+def classify_chapter(chapter: NormalizedChapter, *, total_chapters: int) -> ClassificationResult:
     """Classify one chapter using title rules first, then structural heuristics."""
     for pattern, kind, reason in _STRONG_TITLE_RULES:
         if pattern.match(chapter.title):
@@ -138,10 +136,7 @@ def classify_chapter(
         return ClassificationResult(
             kind=kind,
             confidence=0.75,
-            reason=(
-                f"structural: {chapter.word_count} words, "
-                f"no code, position {position:.0%}"
-            ),
+            reason=(f"structural: {chapter.word_count} words, no code, position {position:.0%}"),
         )
 
     if position > 0.85 and chapter.word_count < 1500 and not chapter.code_blocks:
@@ -149,18 +144,14 @@ def classify_chapter(
             kind=ChapterKind.BACK_MATTER,
             confidence=0.7,
             reason=(
-                f"structural: late position {position:.0%}, "
-                f"{chapter.word_count} words, no code"
+                f"structural: late position {position:.0%}, {chapter.word_count} words, no code"
             ),
         )
 
     return ClassificationResult(
         kind=ChapterKind.CONTENT,
         confidence=0.85,
-        reason=(
-            f"default: {chapter.word_count} words, "
-            f"{len(chapter.code_blocks)} code blocks"
-        ),
+        reason=(f"default: {chapter.word_count} words, {len(chapter.code_blocks)} code blocks"),
     )
 
 

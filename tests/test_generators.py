@@ -154,9 +154,7 @@ class _FakeClient:
         self.last_kwargs = kwargs
         return _FakeStream(
             SimpleNamespace(
-                content=[
-                    SimpleNamespace(type="tool_use", input={"content": self._content})
-                ],
+                content=[SimpleNamespace(type="tool_use", input={"content": self._content})],
                 stop_reason="tool_use",
                 usage=SimpleNamespace(
                     input_tokens=1000,

@@ -129,9 +129,4 @@ def _looks_like_placeholder(target: str) -> bool:
     Scoped to link targets only; the general `find_template_leaks` scanner
     handles body-text leaks where angle brackets might be legitimate prose.
     """
-    return (
-        "{{" in target
-        or "}}" in target
-        or "<" in target
-        or ">" in target
-    )
+    return "{{" in target or "}}" in target or "<" in target or ">" in target

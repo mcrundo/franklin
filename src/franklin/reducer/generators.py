@@ -98,9 +98,7 @@ def generate_artifact(
     context = resolve_feeds(artifact.feeds_from, book=book, sidecars=sidecars)
 
     template_name = _template_name_for(artifact.type)
-    template_vars = _build_template_vars(
-        artifact=artifact, plan=plan, context=context
-    )
+    template_vars = _build_template_vars(artifact=artifact, plan=plan, context=context)
     rendered = render_prompt(template_name, **template_vars)
 
     if CACHE_BREAKPOINT not in rendered:
@@ -128,9 +126,7 @@ def generate_artifact(
 
     content = result.input.get("content", "")
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError(
-            f"generator returned empty or non-string content for {artifact.path}"
-        )
+        raise RuntimeError(f"generator returned empty or non-string content for {artifact.path}")
 
     return GenerationResult(
         content=content,
@@ -170,9 +166,7 @@ def _build_template_vars(
     )
 
     book_context = context.book_markdown or f"# {plan.plugin.name}"
-    resolved_context = (
-        context.chapters_markdown or "_(no sidecar slice resolved)_"
-    )
+    resolved_context = context.chapters_markdown or "_(no sidecar slice resolved)_"
 
     # plan_tree is included for every artifact type so generators can emit
     # correct relative links between files. It lives in the cached prefix
@@ -198,9 +192,7 @@ def _render_plan_tree(plan: PlanManifest) -> str:
     """Render the full artifact list so the skill generator can link to every file."""
     by_type: dict[str, list[tuple[str, str]]] = {}
     for artifact in plan.artifacts:
-        by_type.setdefault(artifact.type.value, []).append(
-            (artifact.path, artifact.brief)
-        )
+        by_type.setdefault(artifact.type.value, []).append((artifact.path, artifact.brief))
 
     lines: list[str] = []
     for type_name in ("skill", "reference", "command", "agent"):

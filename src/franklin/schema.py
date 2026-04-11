@@ -417,9 +417,7 @@ def dump_json(model: BaseModel) -> str:
     return model.model_dump_json(indent=2, exclude_none=False)
 
 
-def parse_json[T: BaseModel](
-    model_cls: type[T], data: str | bytes | dict[str, Any]
-) -> T:
+def parse_json[T: BaseModel](model_cls: type[T], data: str | bytes | dict[str, Any]) -> T:
     """Parse JSON (or a dict) into a model instance."""
     if isinstance(data, dict):
         return model_cls.model_validate(data)

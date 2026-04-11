@@ -129,8 +129,7 @@ def test_validate_links_ignores_external_urls_and_anchors(tmp_path: Path) -> Non
 def test_validate_links_strips_fragments_before_checking(tmp_path: Path) -> None:
     root = _mkplugin(tmp_path)
     (root / "skills/p/references/patterns/query-objects.md").write_text(
-        "# Query Objects\n"
-        "See [service objects](service-objects.md#when-to-use).\n"
+        "# Query Objects\nSee [service objects](service-objects.md#when-to-use).\n"
     )
     assert validate_links(root) == []
 
@@ -138,11 +137,7 @@ def test_validate_links_strips_fragments_before_checking(tmp_path: Path) -> None
 def test_validate_links_reports_line_numbers(tmp_path: Path) -> None:
     root = _mkplugin(tmp_path)
     (root / "skills/p/references/patterns/query-objects.md").write_text(
-        "# Query Objects\n"
-        "\n"
-        "Body text.\n"
-        "\n"
-        "[broken](missing.md)\n"
+        "# Query Objects\n\nBody text.\n\n[broken](missing.md)\n"
     )
     broken = validate_links(root)
     assert len(broken) == 1
@@ -271,9 +266,7 @@ def test_validate_frontmatter_flags_missing_block(tmp_path: Path) -> None:
 
 def test_validate_frontmatter_flags_malformed_yaml(tmp_path: Path) -> None:
     root = _write_valid_plugin(tmp_path)
-    (root / "agents/reviewer.md").write_text(
-        "---\nname: [unterminated list\n---\n\n# Body\n"
-    )
+    (root / "agents/reviewer.md").write_text("---\nname: [unterminated list\n---\n\n# Body\n")
     issues = validate_frontmatter(root)
     assert len(issues) == 1
     assert issues[0].kind == "unparseable"
@@ -281,9 +274,7 @@ def test_validate_frontmatter_flags_malformed_yaml(tmp_path: Path) -> None:
 
 def test_validate_frontmatter_flags_missing_required_field(tmp_path: Path) -> None:
     root = _write_valid_plugin(tmp_path)
-    (root / "skills/p/SKILL.md").write_text(
-        "---\ndescription: No name here\n---\n\n# Body\n"
-    )
+    (root / "skills/p/SKILL.md").write_text("---\ndescription: No name here\n---\n\n# Body\n")
     issues = validate_frontmatter(root)
     assert len(issues) == 1
     assert issues[0].kind == "field-missing"
@@ -292,9 +283,7 @@ def test_validate_frontmatter_flags_missing_required_field(tmp_path: Path) -> No
 
 def test_validate_frontmatter_flags_empty_description(tmp_path: Path) -> None:
     root = _write_valid_plugin(tmp_path)
-    (root / "commands/spec-test.md").write_text(
-        "---\ndescription: \n---\n\n# Body\n"
-    )
+    (root / "commands/spec-test.md").write_text("---\ndescription: \n---\n\n# Body\n")
     issues = validate_frontmatter(root)
     assert len(issues) == 1
     assert issues[0].kind == "field-wrong-type"

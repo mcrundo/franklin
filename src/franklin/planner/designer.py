@@ -124,9 +124,7 @@ def build_distilled_view(book: BookManifest, sidecars: list[ChapterSidecar]) -> 
         if sc.concepts:
             parts.append("**Concepts:**")
             for c in sc.concepts:
-                parts.append(
-                    f"- `{c.id}` **{c.name}** ({c.importance.value}) — {c.definition}"
-                )
+                parts.append(f"- `{c.id}` **{c.name}** ({c.importance.value}) — {c.definition}")
             parts.append("")
 
         if sc.principles:
@@ -161,14 +159,9 @@ def build_distilled_view(book: BookManifest, sidecars: list[ChapterSidecar]) -> 
 
         if sc.code_examples:
             preview_labels = [c.label for c in sc.code_examples[:8]]
-            more = (
-                f" (+ {len(sc.code_examples) - 8} more)"
-                if len(sc.code_examples) > 8
-                else ""
-            )
+            more = f" (+ {len(sc.code_examples) - 8} more)" if len(sc.code_examples) > 8 else ""
             parts.append(
-                f"**Code examples:** {len(sc.code_examples)} — "
-                f"{', '.join(preview_labels)}{more}"
+                f"**Code examples:** {len(sc.code_examples)} — {', '.join(preview_labels)}{more}"
             )
             parts.append("")
 

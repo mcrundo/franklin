@@ -115,8 +115,5 @@ def format_code_blocks(blocks: list[CodeBlock]) -> str:
     for index, block in enumerate(blocks, start=1):
         language = block.language or "text"
         fence_lang = block.language or ""
-        parts.append(
-            f"### code-block-{index} ({language})\n\n"
-            f"```{fence_lang}\n{block.code}\n```"
-        )
+        parts.append(f"### code-block-{index} ({language})\n\n```{fence_lang}\n{block.code}\n```")
     return "\n\n".join(parts)
