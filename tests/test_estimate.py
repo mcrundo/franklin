@@ -96,3 +96,29 @@ def test_estimate_reduce_has_at_least_base_artifacts() -> None:
     result = estimate_run(book, chapters)
     reduce_stage = next(s for s in result.stages if s.stage == "reduce")
     assert reduce_stage.calls >= 8
+
+
+def test_estimate_allowed_ids_narrows_map_calls() -> None:
+    """Pick-flow gate narrows the estimate when a user deselects chapters."""
+    book, chapters = _book(n_content=10)
+    subset = {"ch01", "ch02", "ch03"}
+    result = estimate_run(book, chapters, allowed_ids=subset)
+    map_stage = next(s for s in result.stages if s.stage == "map")
+    assert map_stage.calls == 3
+    assert result.content_chapters == 3
+
+
+def test_estimate_allowed_ids_reduces_cost() -> None:
+    book, chapters = _book(n_content=20)
+    full = estimate_run(book, chapters).total_cost_usd
+    narrowed = estimate_run(book, chapters, allowed_ids={"ch01", "ch02"}).total_cost_usd
+    assert narrowed < full
+
+
+def test_estimate_exposes_cost_range() -> None:
+    """Displayed range: pessimistic point estimate is the high end, low is a
+    discounted multiple representing cache savings and output slack."""
+    book, chapters = _book(n_content=10)
+    result = estimate_run(book, chapters)
+    assert result.total_cost_low_usd < result.total_cost_usd
+    assert result.total_cost_low_usd > 0

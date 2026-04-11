@@ -108,6 +108,37 @@ class RunDirectory:
     def load_plan(self) -> PlanManifest:
         return parse_json(PlanManifest, self.plan_json.read_text())
 
+    # ---- map-stage chapter selection ----
+    #
+    # Set by `franklin pick`'s Gate 1 when the user deselects chapters.
+    # Honored by the map stage as a subset filter. Persisted on disk so
+    # it survives `franklin run` resumes — deselecting at pick time and
+    # then re-running later doesn't silently re-add the omitted chapters.
+
+    @property
+    def map_selection_json(self) -> Path:
+        return self.root / "map_selection.json"
+
+    def save_map_selection(self, chapter_ids: list[str]) -> None:
+        import json
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.map_selection_json.write_text(json.dumps({"chapter_ids": chapter_ids}, indent=2))
+
+    def load_map_selection(self) -> list[str] | None:
+        import json
+
+        if not self.map_selection_json.exists():
+            return None
+        try:
+            data = json.loads(self.map_selection_json.read_text())
+        except (OSError, ValueError):
+            return None
+        ids = data.get("chapter_ids")
+        if not isinstance(ids, list):
+            return None
+        return [str(x) for x in ids]
+
 
 # ---------------------------------------------------------------------------
 # Run history summaries

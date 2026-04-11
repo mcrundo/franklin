@@ -45,6 +45,15 @@ _REDUCE_OUTPUT_PER_ARTIFACT = 5_000
 _ARTIFACT_BASE = 8
 _ARTIFACTS_PER_CONTENT_CHAPTER = 0.5
 
+# The point numbers above are the *pessimistic* end — they over-count
+# tokens to avoid under-promising the "continue? [y/N]" prompt. The low
+# end of the displayed range applies this multiplier to model realistic
+# savings: prompt caching on repeated system/tool-use prompts, shorter
+# real outputs than the worst-case overhead, and fewer reduce artifacts
+# than the upper-bound artifact count. 0.65 is an empirical middle —
+# enough savings to be useful, not so aggressive it misleads.
+_LOW_END_MULTIPLIER = 0.65
+
 
 @dataclass(frozen=True)
 class StageEstimate:
@@ -73,7 +82,13 @@ class RunEstimate:
 
     @property
     def total_cost_usd(self) -> float:
+        """Pessimistic upper-bound cost — the right number to promise against."""
         return sum(s.cost_usd for s in self.stages)
+
+    @property
+    def total_cost_low_usd(self) -> float:
+        """Realistic lower-bound cost after cache + output-slack savings."""
+        return self.total_cost_usd * _LOW_END_MULTIPLIER
 
     @property
     def total_calls(self) -> int:
@@ -97,22 +112,29 @@ def estimate_run(
     chapters: list[NormalizedChapter],
     *,
     include_cleanup: bool = False,
+    allowed_ids: set[str] | None = None,
 ) -> RunEstimate:
     """Predict token counts and cost for a full ``franklin run``.
 
     Pass ``include_cleanup=True`` when the run will use the Tier 4 LLM
     cleanup pass (``--clean``) — it's a meaningful addition to the total
     and shouldn't be hidden from the pre-run prompt.
+
+    ``allowed_ids`` narrows the estimate to a user-chosen subset of
+    chapter ids — used by the pick-flow gate when the user deselects
+    chapters they don't want mapped, so the re-displayed cost reflects
+    what the run will actually spend.
     """
+    toc_kind_by_id = {entry.id: entry.kind for entry in book.structure.toc}
     content_chapters = [
-        c
-        for c, toc in zip(chapters, book.structure.toc, strict=False)
-        if toc.kind == ChapterKind.CONTENT
+        c for c in chapters if toc_kind_by_id.get(c.chapter_id) == ChapterKind.CONTENT
     ]
-    # Fall back to all chapters if the zip/kind alignment didn't match —
+    # Fall back to all chapters if the TOC alignment didn't match —
     # better to over-estimate than crash on a partial manifest.
     if not content_chapters:
         content_chapters = list(chapters)
+    if allowed_ids is not None:
+        content_chapters = [c for c in content_chapters if c.chapter_id in allowed_ids]
 
     total_words = sum(c.word_count for c in content_chapters)
     stages: list[StageEstimate] = []
