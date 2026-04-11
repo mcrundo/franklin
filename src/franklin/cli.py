@@ -1577,7 +1577,7 @@ def run_pipeline(
     clean: bool = typer.Option(
         False,
         "--clean",
-        help="Include Tier 4 cleanup in the cost estimate (has no effect without --estimate)",
+        help="Run Tier 4 LLM cleanup during ingest (PDF only; also shown in --estimate totals)",
     ),
     push: bool = typer.Option(
         False, "--push", help="After assemble, push the plugin to GitHub (requires --repo)"
@@ -1624,7 +1624,7 @@ def run_pipeline(
                 book_path=book_path,
                 output=run.root,
                 yes_i_know_pdfs=False,
-                clean=False,
+                clean=clean,
                 clean_concurrency=8,
                 yes=yes,
             ),

@@ -78,8 +78,11 @@ Once a run is assembled and you're happy with the grade:
 # Try it locally before publishing (ephemeral, per-session)
 uv run franklin install <run-dir> --scope local
 
-# Or persist it to your user scope
+# Or persist it to your user scope (every Claude Code session)
 uv run franklin install <run-dir> --scope user
+
+# Or scope it to the current project (committed to .claude/settings.json)
+uv run franklin install <run-dir> --scope project
 
 # When ready to share, push to a GitHub repo
 uv run franklin push <run-dir> --repo owner/name
@@ -118,12 +121,12 @@ runs/<slug>/
 
 - **Runs directory**: defaults to `./runs/` relative to cwd; override with `--output` on any stage command.
 - **License directory**: defaults to `~/.config/franklin/`; override with `FRANKLIN_LICENSE_DIR`.
-- **Models**: `claude-sonnet-4-6` for map and cleanup, `claude-opus-4-6` for plan and reduce. Override per-command with `--model`.
+- **Models**: `claude-sonnet-4-6` is the default for `map`, `reduce`, and `cleanup`; `claude-opus-4-6` is the default for `plan`. Override per-command with `--model`.
 
 ## Development
 
 ```bash
-uv run pytest              # 341 tests
+uv run pytest              # run the test suite
 uv run ruff check .        # lint
 uv run ruff format .       # format
 uv run mypy                # type check (strict)
