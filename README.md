@@ -91,7 +91,7 @@ uv run franklin push <run-dir> --repo owner/name
 claude plugin install owner/name
 ```
 
-`franklin push` is license-gated; `franklin install` is free. Use `franklin license status` to check your license state at any time, or `franklin license login` to install a JWT.
+v0.1 ships fully free: every command above is available without a license, and you don't need to run `franklin license login` before `franklin push` or `franklin install`. The license module stays in place for a future paid tier; `franklin license status` continues to work if you want to inspect state, but no command calls it as a gate today.
 
 ## Advisor strategy (Opus advises, Sonnet executes)
 

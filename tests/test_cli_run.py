@@ -365,6 +365,7 @@ def test_run_push_surfaces_license_gate_error_after_assembly(
     book_epub: Path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without a license, the run reaches the push stage and the real
     push_command's internal gate fires with the friendly multi-line
@@ -376,6 +377,10 @@ def test_run_push_surfaces_license_gate_error_after_assembly(
     run_pipeline's resume-on-disk logic correctly skips stages whose
     outputs already exist, and the fixture pre-populates plan.json).
     """
+    from franklin import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_LICENSE_GATE_ENABLED", True)
+
     run_dir = tmp_path / "run-output"
     _write_assembled_run(run_dir, plugin_name="test-plugin")
 

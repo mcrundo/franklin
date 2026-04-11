@@ -77,6 +77,11 @@ def _isolated_license_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
         "_refresh_revocations_opportunistic",
         lambda state: False,
     )
+    # v0.1 ships with the license gate disabled; these tests exist to
+    # prove the gate logic still works, so they re-enable it locally.
+    from franklin import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_LICENSE_GATE_ENABLED", True)
 
 
 @pytest.fixture

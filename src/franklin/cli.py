@@ -106,15 +106,26 @@ console = Console()
 
 _PRICING_URL = "https://franklin.example.com/pricing"
 
+# v0.1 of franklin ships fully free: every command is available regardless
+# of license state. The license module stays in place (login, logout,
+# whoami, status still work, and `_gate_pro_feature` is still exercised
+# by tests that pin `_LICENSE_GATE_ENABLED=True`) so when a paid tier
+# ships the gate can be re-enabled with a one-line flip here.
+_LICENSE_GATE_ENABLED = False
+
 
 def _gate_pro_feature(feature: str, command: str) -> None:
     """Check the license for a premium command, or exit with a friendly error.
 
-    Calls ensure_license(feature=...) and translates any LicenseError into
-    a multi-line, ANSI-rendered explanation the user can act on. Never
-    lets a stack trace reach stderr on license failure — the license
-    module's messages go into the body of the panel, nothing else.
+    No-op when ``_LICENSE_GATE_ENABLED`` is False (the v0.1 default).
+    When enabled, calls ensure_license(feature=...) and translates any
+    LicenseError into a multi-line, ANSI-rendered explanation the user
+    can act on. Never lets a stack trace reach stderr on license
+    failure — the license module's messages go into the body of the
+    panel, nothing else.
     """
+    if not _LICENSE_GATE_ENABLED:
+        return
     try:
         ensure_license(feature=feature)
     except LicenseError as exc:

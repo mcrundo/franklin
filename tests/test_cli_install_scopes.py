@@ -284,7 +284,11 @@ def test_install_local_scope_respects_license_gate(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Local scope is still a premium install path."""
+    """Local scope is still a premium install path when the gate is on."""
+    from franklin import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_LICENSE_GATE_ENABLED", True)
+
     # Remove the seeded license
     license_mod.logout()
     # Also clear the state file so we're cleanly unlicensed
@@ -302,8 +306,14 @@ def test_install_local_scope_respects_license_gate(
 
 
 def test_install_project_scope_respects_license_gate(
-    run_dir: Path, capsys: pytest.CaptureFixture[str]
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    from franklin import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_LICENSE_GATE_ENABLED", True)
+
     license_mod.logout()
     state_path = license_mod._state_path()
     if state_path.exists():
