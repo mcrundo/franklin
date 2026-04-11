@@ -33,6 +33,7 @@ from franklin.checkpoint import (
 )
 from franklin.classify import classify_chapters
 from franklin.doctor import CheckStatus, has_failures, run_checks
+from franklin.errors import FriendlyError, format_friendly_error
 from franklin.estimate import RunEstimate, estimate_run
 from franklin.grading import RunGrade, grade_run, write_metrics
 from franklin.ingest import UnsupportedFormatError, ingest_book
@@ -126,6 +127,19 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
         return RunDirectory(output)
     slug = slugify(book_path.stem)
     return RunDirectory(Path.cwd() / "runs" / slug)
+
+
+def _print_friendly_error(friendly: FriendlyError, *, stage: str | None = None) -> None:
+    """Render a FriendlyError as a Rich block with title/detail/suggestion."""
+    prefix = f"{stage} stage — " if stage else ""
+    console.print()
+    console.print(f"[red]✗[/red] [bold red]{prefix}{friendly.title}[/bold red]")
+    if friendly.detail:
+        console.print(f"  [dim]{friendly.detail}[/dim]")
+    console.print(f"  [yellow]→[/yellow] {friendly.suggestion}")
+    if friendly.is_retryable:
+        console.print("  [dim]this error is retryable[/dim]")
+    console.print()
 
 
 def _maybe_confirm_metadata(manifest: BookManifest, *, skip: bool) -> None:
@@ -1513,8 +1527,9 @@ def run_pipeline(
                 raise typer.Exit(code=exc.exit_code) from exc
             # exit_code 0 is a graceful "nothing to do" — continue to next stage.
         except Exception as exc:
-            console.print(f"[red]✗ {name} stage raised {type(exc).__name__}: {exc}[/red]")
-            raise typer.Exit(code=1) from exc
+            friendly = format_friendly_error(exc)
+            _print_friendly_error(friendly, stage=name)
+            raise typer.Exit(code=friendly.exit_code) from exc
         console.print()
 
     console.rule("[bold green]pipeline complete[/bold green]")
