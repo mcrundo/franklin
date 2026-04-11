@@ -118,13 +118,25 @@ def ingest(
         "--yes-i-know-pdfs",
         help="Suppress the PDF quality-caveat warning",
     ),
+    clean: bool = typer.Option(
+        False,
+        "--clean",
+        help="Run a Tier 4 LLM cleanup pass on extracted chapters (PDF only)",
+    ),
 ) -> None:
     """Parse a book file (EPUB or PDF) into normalized chapters and a partial book.json."""
     run = _resolve_run_dir(book_path, output)
     run.ensure()
 
-    if book_path.suffix.lower() == ".pdf" and not yes_i_know_pdfs:
+    is_pdf = book_path.suffix.lower() == ".pdf"
+    if is_pdf and not yes_i_know_pdfs:
         _print_pdf_warning()
+
+    if clean and not is_pdf:
+        console.print(
+            "[dim]--clean is a no-op on EPUBs (they're already structurally clean)[/dim]"
+        )
+        clean = False
 
     console.print(f"[bold]Ingesting[/bold] {book_path}")
     try:
@@ -132,6 +144,17 @@ def ingest(
     except UnsupportedFormatError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+    if clean:
+        chapters = _run_cleanup_pass(chapters)
+        # Rebuild structure totals from the cleaned chapters so book.json reflects
+        # the post-cleanup word counts.
+        manifest.structure.total_words = sum(c.word_count for c in chapters)
+        by_id = {e.id: e for e in manifest.structure.toc}
+        for chapter in chapters:
+            entry = by_id.get(chapter.chapter_id)
+            if entry is not None:
+                entry.word_count = chapter.word_count
 
     classifications = classify_chapters(chapters)
     for toc_entry in manifest.structure.toc:
@@ -145,6 +168,54 @@ def ingest(
         run.save_raw_chapter(chapter)
 
     _print_ingest_summary(run, manifest, chapters)
+
+
+def _run_cleanup_pass(chapters: list[NormalizedChapter]) -> list[NormalizedChapter]:
+    """Invoke the Tier 4 LLM cleanup pass on every chapter, with progress + recap."""
+    from franklin.ingest.cleanup import clean_chapters
+
+    try:
+        ensure_anthropic_api_key()
+    except MissingApiKeyError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    estimate = len(chapters) * 0.08  # rough per-chapter cleanup cost estimate in USD
+    console.print()
+    console.rule("[bold]Tier 4 cleanup[/bold]")
+    console.print(f"  about to send {len(chapters)} chapters to Claude for mechanical cleanup")
+    console.print(
+        f"  estimated cost: [yellow]~${estimate:.2f}[/yellow] total "
+        "(actual will vary with chapter length)"
+    )
+    console.print()
+
+    def on_progress(chapter: NormalizedChapter) -> None:
+        console.print(
+            f"  [dim]cleaning[/dim] [cyan]{chapter.chapter_id}[/cyan] "
+            f"[dim]({chapter.title[:60]})[/dim]"
+        )
+
+    def on_failure(chapter: NormalizedChapter, exc: Exception) -> None:
+        console.print(f"    [yellow]⚠ cleanup failed for {chapter.chapter_id}:[/yellow] {exc}")
+        console.print("    [dim]keeping the Tier 2 extraction for this chapter[/dim]")
+
+    cleaned, total_in, total_out, failed_ids = clean_chapters(
+        chapters, on_progress=on_progress, on_failure=on_failure
+    )
+
+    console.print()
+    ok_count = len(cleaned) - len(failed_ids)
+    console.print(
+        f"[green]✓[/green] cleanup complete: {ok_count}/{len(cleaned)} chapters cleaned "
+        f"[dim]({total_in:,} in / {total_out:,} out tokens)[/dim]"
+    )
+    if failed_ids:
+        console.print(
+            f"  [yellow]{len(failed_ids)} failures:[/yellow] "
+            f"{', '.join(failed_ids)} — kept Tier 2 output for these"
+        )
+    return cleaned
 
 
 def _print_pdf_warning() -> None:
