@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from anthropic import Anthropic
+from anthropic import Anthropic, AsyncAnthropic
 
 # max_tokens is a safety ceiling, not a billing amount — you only pay for
 # what the model actually generates. We set this high enough that even the
@@ -42,6 +42,11 @@ def make_client() -> Anthropic:
     return Anthropic()
 
 
+def make_async_client() -> AsyncAnthropic:
+    """Build an async Anthropic client from environment configuration."""
+    return AsyncAnthropic()
+
+
 def text_block(value: str) -> dict[str, Any]:
     """Build a plain text content block."""
     return {"type": "text", "text": value}
@@ -62,6 +67,50 @@ def cached_text_block(value: str) -> dict[str, Any]:
         "text": value,
         "cache_control": {"type": "ephemeral"},
     }
+
+
+def _build_stream_kwargs(
+    *,
+    model: str,
+    system: str | list[dict[str, Any]],
+    user: str | list[dict[str, Any]],
+    tool_name: str,
+    tool_description: str,
+    tool_schema: dict[str, Any],
+    max_tokens: int,
+) -> dict[str, Any]:
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+        "tools": [
+            {
+                "name": tool_name,
+                "description": tool_description,
+                "input_schema": tool_schema,
+            }
+        ],
+        "tool_choice": {"type": "tool", "name": tool_name},
+    }
+
+
+def _tool_result_from_response(response: Any, tool_name: str) -> ToolResult:
+    """Shared parser for sync and async stream responses."""
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use":
+            usage = getattr(response, "usage", None)
+            return ToolResult(
+                input=dict(block.input),
+                stop_reason=getattr(response, "stop_reason", "") or "",
+                input_tokens=getattr(usage, "input_tokens", 0) if usage else 0,
+                output_tokens=getattr(usage, "output_tokens", 0) if usage else 0,
+                cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) if usage else 0,
+                cache_creation_tokens=(
+                    getattr(usage, "cache_creation_input_tokens", 0) if usage else 0
+                ),
+            )
+    raise RuntimeError(f"Expected tool_use block calling {tool_name!r}, got none in response")
 
 
 def call_tool(
@@ -93,36 +142,48 @@ def call_tool(
     which should not happen when tool_choice is set but is worth surfacing
     clearly if it does.
     """
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": user}],
-        "tools": [
-            {
-                "name": tool_name,
-                "description": tool_description,
-                "input_schema": tool_schema,
-            }
-        ],
-        "tool_choice": {"type": "tool", "name": tool_name},
-    }
-
+    kwargs = _build_stream_kwargs(
+        model=model,
+        system=system,
+        user=user,
+        tool_name=tool_name,
+        tool_description=tool_description,
+        tool_schema=tool_schema,
+        max_tokens=max_tokens,
+    )
     with client.messages.stream(**kwargs) as stream:
         response = stream.get_final_message()
+    return _tool_result_from_response(response, tool_name)
 
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use":
-            usage = getattr(response, "usage", None)
-            return ToolResult(
-                input=dict(block.input),
-                stop_reason=getattr(response, "stop_reason", "") or "",
-                input_tokens=getattr(usage, "input_tokens", 0) if usage else 0,
-                output_tokens=getattr(usage, "output_tokens", 0) if usage else 0,
-                cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) if usage else 0,
-                cache_creation_tokens=(
-                    getattr(usage, "cache_creation_input_tokens", 0) if usage else 0
-                ),
-            )
 
-    raise RuntimeError(f"Expected tool_use block calling {tool_name!r}, got none in response")
+async def call_tool_async(
+    *,
+    client: Any,
+    model: str,
+    system: str | list[dict[str, Any]],
+    user: str | list[dict[str, Any]],
+    tool_name: str,
+    tool_description: str,
+    tool_schema: dict[str, Any],
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> ToolResult:
+    """Async counterpart of call_tool using ``AsyncAnthropic``.
+
+    Identical contract and output shape. Use this from async contexts
+    (e.g., ``asyncio.gather``) when you need bounded-concurrency
+    parallelism across many calls — the reduce and cleanup stages both
+    benefit dramatically, turning 50-minute sequential runs into 5-minute
+    concurrent ones.
+    """
+    kwargs = _build_stream_kwargs(
+        model=model,
+        system=system,
+        user=user,
+        tool_name=tool_name,
+        tool_description=tool_description,
+        tool_schema=tool_schema,
+        max_tokens=max_tokens,
+    )
+    async with client.messages.stream(**kwargs) as stream:
+        response = await stream.get_final_message()
+    return _tool_result_from_response(response, tool_name)

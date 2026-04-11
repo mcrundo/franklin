@@ -15,14 +15,23 @@ aborting a whole book's cleanup pass.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from franklin.llm import call_tool, make_client, render_prompt
+from franklin.llm import (
+    call_tool,
+    call_tool_async,
+    make_async_client,
+    make_client,
+    render_prompt,
+)
 from franklin.llm.client import DEFAULT_MAX_TOKENS
 from franklin.schema import NormalizedChapter
+
+DEFAULT_CLEANUP_CONCURRENCY = 8
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -51,6 +60,42 @@ class _CleanupPayload(BaseModel):
     cleaned_text: str = Field(description="The full cleaned prose of the chapter")
 
 
+def _render_user_prompt(chapter: NormalizedChapter) -> str:
+    return render_prompt(
+        "clean_chapter",
+        chapter_title=chapter.title,
+        chapter_id=chapter.chapter_id,
+        word_count=str(chapter.word_count),
+        chapter_text=chapter.text,
+    )
+
+
+def _parse_cleanup_result(
+    chapter: NormalizedChapter, raw_input: dict[str, Any]
+) -> NormalizedChapter:
+    try:
+        payload = _CleanupPayload.model_validate(raw_input)
+    except ValidationError as exc:
+        raise RuntimeError(
+            f"cleanup returned invalid payload for {chapter.chapter_id}: {exc}"
+        ) from exc
+
+    cleaned_text = payload.cleaned_text.strip()
+    if not cleaned_text:
+        raise RuntimeError(f"cleanup returned empty text for {chapter.chapter_id}")
+
+    return NormalizedChapter(
+        chapter_id=chapter.chapter_id,
+        title=chapter.title,
+        order=chapter.order,
+        source_ref=chapter.source_ref,
+        word_count=len(cleaned_text.split()),
+        text=cleaned_text,
+        code_blocks=chapter.code_blocks,
+        headings=chapter.headings,
+    )
+
+
 def clean_chapter(
     chapter: NormalizedChapter,
     *,
@@ -69,47 +114,44 @@ def clean_chapter(
     doesn't match the expected shape.
     """
     llm = client if client is not None else make_client()
-    user_prompt = render_prompt(
-        "clean_chapter",
-        chapter_title=chapter.title,
-        chapter_id=chapter.chapter_id,
-        word_count=str(chapter.word_count),
-        chapter_text=chapter.text,
-    )
-
     result = call_tool(
         client=llm,
         model=model,
         system=_SYSTEM_PROMPT,
-        user=user_prompt,
+        user=_render_user_prompt(chapter),
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
         tool_schema=_CleanupPayload.model_json_schema(),
         max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
     )
+    cleaned = _parse_cleanup_result(chapter, result.input)
+    return cleaned, result.input_tokens, result.output_tokens
 
-    try:
-        payload = _CleanupPayload.model_validate(result.input)
-    except ValidationError as exc:
-        raise RuntimeError(
-            f"cleanup returned invalid payload for {chapter.chapter_id}: {exc}"
-        ) from exc
 
-    cleaned_text = payload.cleaned_text.strip()
-    if not cleaned_text:
-        raise RuntimeError(f"cleanup returned empty text for {chapter.chapter_id}")
+async def clean_chapter_async(
+    chapter: NormalizedChapter,
+    *,
+    client: Any,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int | None = None,
+) -> tuple[NormalizedChapter, int, int]:
+    """Async version of ``clean_chapter`` for bounded-concurrency use.
 
-    cleaned_chapter = NormalizedChapter(
-        chapter_id=chapter.chapter_id,
-        title=chapter.title,
-        order=chapter.order,
-        source_ref=chapter.source_ref,
-        word_count=len(cleaned_text.split()),
-        text=cleaned_text,
-        code_blocks=chapter.code_blocks,
-        headings=chapter.headings,
+    Requires an AsyncAnthropic-compatible client — callers should share
+    a single client across all concurrent calls in a batch.
+    """
+    result = await call_tool_async(
+        client=client,
+        model=model,
+        system=_SYSTEM_PROMPT,
+        user=_render_user_prompt(chapter),
+        tool_name=_TOOL_NAME,
+        tool_description=_TOOL_DESCRIPTION,
+        tool_schema=_CleanupPayload.model_json_schema(),
+        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
     )
-    return cleaned_chapter, result.input_tokens, result.output_tokens
+    cleaned = _parse_cleanup_result(chapter, result.input)
+    return cleaned, result.input_tokens, result.output_tokens
 
 
 def clean_chapters(
@@ -120,12 +162,17 @@ def clean_chapters(
     on_progress: Callable[[NormalizedChapter], None] | None = None,
     on_failure: Callable[[NormalizedChapter, Exception], None] | None = None,
 ) -> tuple[list[NormalizedChapter], int, int, list[str]]:
-    """Clean every chapter in a list via ``clean_chapter``.
+    """Clean every chapter in a list via ``clean_chapter`` (sequential).
+
+    Kept for tests and anywhere strict sequential ordering matters. For
+    real ingest runs the CLI uses ``clean_chapters_async`` via
+    ``asyncio.run`` because sequential cleanup of a 29-chapter book takes
+    ~50 minutes wall clock.
 
     Per-chapter failures are non-fatal: the original Tier 2 chapter is
-    kept in place and the failure is reported through ``on_failure`` (if
-    provided). Returns the cleaned list, total input tokens, total output
-    tokens, and the list of chapter ids that failed.
+    kept in place and the failure is reported through ``on_failure``
+    (if provided). Returns the cleaned list, total input tokens, total
+    output tokens, and the list of chapter ids that failed.
     """
     llm = client if client is not None else make_client()
     cleaned: list[NormalizedChapter] = []
@@ -147,5 +194,73 @@ def clean_chapters(
         cleaned.append(new_chapter)
         total_input += in_tokens
         total_output += out_tokens
+
+    return cleaned, total_input, total_output, failed_ids
+
+
+async def clean_chapters_async(
+    chapters: list[NormalizedChapter],
+    *,
+    client: Any | None = None,
+    model: str = DEFAULT_MODEL,
+    concurrency: int = DEFAULT_CLEANUP_CONCURRENCY,
+    on_progress: Callable[[NormalizedChapter], None] | None = None,
+    on_failure: Callable[[NormalizedChapter, Exception], None] | None = None,
+) -> tuple[list[NormalizedChapter], int, int, list[str]]:
+    """Clean every chapter concurrently with a bounded semaphore.
+
+    Turns the sequential ~1.5-2 min per chapter cadence into concurrent
+    waves of ``concurrency`` calls. For a 29-chapter book at the default
+    concurrency=8, wall clock drops from ~50 minutes to ~6 minutes.
+
+    Output ordering matches the input order (same as the sync version).
+    Per-chapter failures are non-fatal; the original chapter is kept and
+    the failure is reported via ``on_failure``. Total input/output token
+    counts and the list of failed chapter ids are returned alongside.
+
+    The client parameter should be an AsyncAnthropic instance (or a
+    compatible fake for tests). Callers share one client across all
+    concurrent calls.
+    """
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
+
+    llm = client if client is not None else make_async_client()
+    sem = asyncio.Semaphore(concurrency)
+
+    async def one(
+        index: int, chapter: NormalizedChapter
+    ) -> tuple[int, NormalizedChapter, int, int, Exception | None]:
+        async with sem:
+            try:
+                new_chapter, in_tokens, out_tokens = await clean_chapter_async(
+                    chapter, client=llm, model=model
+                )
+            except Exception as exc:
+                if on_failure is not None:
+                    on_failure(chapter, exc)
+                return index, chapter, 0, 0, exc
+            if on_progress is not None:
+                on_progress(new_chapter)
+            return index, new_chapter, in_tokens, out_tokens, None
+
+    tasks = [one(i, ch) for i, ch in enumerate(chapters)]
+    results = await asyncio.gather(*tasks)
+
+    # Results are returned out of order because of concurrency — restore the
+    # input order so the caller sees a deterministic result list.
+    results.sort(key=lambda r: r[0])
+
+    cleaned: list[NormalizedChapter] = []
+    failed_ids: list[str] = []
+    total_input = 0
+    total_output = 0
+    for _idx, chapter_out, in_toks, out_toks, exc in results:
+        cleaned.append(chapter_out)
+        if exc is not None:
+            failed_ids.append(chapter_out.chapter_id)
+            continue
+        total_input += in_toks
+        total_output += out_toks
 
     return cleaned, total_input, total_output, failed_ids

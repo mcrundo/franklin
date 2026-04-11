@@ -123,6 +123,13 @@ def ingest(
         "--clean",
         help="Run a Tier 4 LLM cleanup pass on extracted chapters (PDF only)",
     ),
+    clean_concurrency: int = typer.Option(
+        8,
+        "--clean-concurrency",
+        help="Number of concurrent LLM cleanup calls when --clean is set",
+        min=1,
+        max=32,
+    ),
 ) -> None:
     """Parse a book file (EPUB or PDF) into normalized chapters and a partial book.json."""
     run = _resolve_run_dir(book_path, output)
@@ -146,7 +153,7 @@ def ingest(
         raise typer.Exit(code=1) from exc
 
     if clean:
-        chapters = _run_cleanup_pass(chapters)
+        chapters = _run_cleanup_pass(chapters, concurrency=clean_concurrency)
         # Rebuild structure totals from the cleaned chapters so book.json reflects
         # the post-cleanup word counts.
         manifest.structure.total_words = sum(c.word_count for c in chapters)
@@ -170,9 +177,18 @@ def ingest(
     _print_ingest_summary(run, manifest, chapters)
 
 
-def _run_cleanup_pass(chapters: list[NormalizedChapter]) -> list[NormalizedChapter]:
-    """Invoke the Tier 4 LLM cleanup pass on every chapter, with progress + recap."""
-    from franklin.ingest.cleanup import clean_chapters
+def _run_cleanup_pass(
+    chapters: list[NormalizedChapter], *, concurrency: int
+) -> list[NormalizedChapter]:
+    """Invoke the Tier 4 LLM cleanup pass via the async pipeline.
+
+    Drives ``clean_chapters_async`` via ``asyncio.run`` with a bounded
+    semaphore so 29 chapters complete in roughly ``total / concurrency``
+    waves of ~1.5-2 min each, instead of ~50 min sequential.
+    """
+    import asyncio
+
+    from franklin.ingest.cleanup import clean_chapters_async
 
     try:
         ensure_anthropic_api_key()
@@ -184,24 +200,40 @@ def _run_cleanup_pass(chapters: list[NormalizedChapter]) -> list[NormalizedChapt
     console.print()
     console.rule("[bold]Tier 4 cleanup[/bold]")
     console.print(f"  about to send {len(chapters)} chapters to Claude for mechanical cleanup")
+    console.print(f"  concurrency: [cyan]{concurrency}[/cyan] in flight at once")
     console.print(
         f"  estimated cost: [yellow]~${estimate:.2f}[/yellow] total "
         "(actual will vary with chapter length)"
     )
     console.print()
 
+    done_count = 0
+    total_count = len(chapters)
+
     def on_progress(chapter: NormalizedChapter) -> None:
+        nonlocal done_count
+        done_count += 1
         console.print(
-            f"  [dim]cleaning[/dim] [cyan]{chapter.chapter_id}[/cyan] "
-            f"[dim]({chapter.title[:60]})[/dim]"
+            f"  [green]✓[/green] [cyan]{chapter.chapter_id}[/cyan] "
+            f"[dim]({chapter.title[:60]}) — {done_count}/{total_count}[/dim]"
         )
 
     def on_failure(chapter: NormalizedChapter, exc: Exception) -> None:
-        console.print(f"    [yellow]⚠ cleanup failed for {chapter.chapter_id}:[/yellow] {exc}")
-        console.print("    [dim]keeping the Tier 2 extraction for this chapter[/dim]")
+        nonlocal done_count
+        done_count += 1
+        console.print(
+            f"  [yellow]⚠[/yellow] [cyan]{chapter.chapter_id}[/cyan] "
+            f"cleanup failed: {exc} — keeping Tier 2 output "
+            f"[dim]({done_count}/{total_count})[/dim]"
+        )
 
-    cleaned, total_in, total_out, failed_ids = clean_chapters(
-        chapters, on_progress=on_progress, on_failure=on_failure
+    cleaned, total_in, total_out, failed_ids = asyncio.run(
+        clean_chapters_async(
+            chapters,
+            concurrency=concurrency,
+            on_progress=on_progress,
+            on_failure=on_failure,
+        )
     )
 
     console.print()
