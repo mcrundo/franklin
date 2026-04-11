@@ -33,6 +33,8 @@ class ToolResult:
     stop_reason: str
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 def make_client() -> Anthropic:
@@ -40,18 +42,46 @@ def make_client() -> Anthropic:
     return Anthropic()
 
 
+def text_block(value: str) -> dict[str, Any]:
+    """Build a plain text content block."""
+    return {"type": "text", "text": value}
+
+
+def cached_text_block(value: str) -> dict[str, Any]:
+    """Build a text content block marked for ephemeral prompt caching.
+
+    Anthropic's prompt caching stores the content at this breakpoint for
+    ~5 minutes; subsequent calls within that window that repeat the same
+    prefix pay roughly 10% of the normal input cost for the cached tokens.
+    Use this for content that is stable across many calls in a single run
+    — system prompts, book metadata, coherence rules, the bulky distilled
+    sidecar slice — and leave the per-call variable tail uncached.
+    """
+    return {
+        "type": "text",
+        "text": value,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
 def call_tool(
     *,
     client: Any,
     model: str,
-    system: str,
-    user: str,
+    system: str | list[dict[str, Any]],
+    user: str | list[dict[str, Any]],
     tool_name: str,
     tool_description: str,
     tool_schema: dict[str, Any],
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> ToolResult:
     """Call Claude with forced tool use and return the parsed tool input.
+
+    The `system` and `user` parameters accept either a plain string (no
+    caching, simple case) or a list of content blocks. Pass content blocks
+    built with cached_text_block() to enable prompt caching for the stable
+    prefix of a repeated call pattern — typically how the reduce stage
+    amortizes its system prompt and book context across many generations.
 
     Uses the streaming entrypoint (`messages.stream`) because the SDK
     refuses non-streaming calls whose max_tokens could in principle exceed
@@ -83,11 +113,16 @@ def call_tool(
 
     for block in response.content:
         if getattr(block, "type", None) == "tool_use":
+            usage = getattr(response, "usage", None)
             return ToolResult(
                 input=dict(block.input),
                 stop_reason=getattr(response, "stop_reason", "") or "",
-                input_tokens=getattr(response.usage, "input_tokens", 0),
-                output_tokens=getattr(response.usage, "output_tokens", 0),
+                input_tokens=getattr(usage, "input_tokens", 0) if usage else 0,
+                output_tokens=getattr(usage, "output_tokens", 0) if usage else 0,
+                cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) if usage else 0,
+                cache_creation_tokens=(
+                    getattr(usage, "cache_creation_input_tokens", 0) if usage else 0
+                ),
             )
 
     raise RuntimeError(

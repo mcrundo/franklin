@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from franklin.llm.client import call_tool
+from franklin.llm.client import cached_text_block, call_tool, text_block
 from franklin.llm.prompts import load_prompt, render_prompt
 
 
@@ -113,3 +113,89 @@ def test_render_prompt_substitutes_double_brace_placeholders(tmp_path: Any) -> N
 def test_load_prompt_missing_raises() -> None:
     with pytest.raises(FileNotFoundError):
         load_prompt("definitely_not_a_real_prompt_xyz")
+
+
+def test_text_block_is_plain_content_block() -> None:
+    block = text_block("hello")
+    assert block == {"type": "text", "text": "hello"}
+
+
+def test_cached_text_block_carries_ephemeral_cache_control() -> None:
+    block = cached_text_block("stable prefix")
+    assert block == {
+        "type": "text",
+        "text": "stable prefix",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_call_tool_passes_structured_content_through() -> None:
+    """When system and user are lists of content blocks, they're passed through
+    to the SDK as-is so callers can mark any block with cache_control."""
+    client = _FakeClient({"ok": True})
+    call_tool(
+        client=client,
+        model="claude-sonnet-4-6",
+        system=[cached_text_block("shared system prompt")],
+        user=[
+            cached_text_block("stable book context"),
+            text_block("variable artifact brief"),
+        ],
+        tool_name="save",
+        tool_description="save a thing",
+        tool_schema={"type": "object"},
+    )
+
+    assert client.last_kwargs is not None
+    system_arg = client.last_kwargs["system"]
+    assert isinstance(system_arg, list)
+    assert system_arg[0]["cache_control"] == {"type": "ephemeral"}
+
+    user_content = client.last_kwargs["messages"][0]["content"]
+    assert isinstance(user_content, list)
+    assert user_content[0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in user_content[1]
+
+
+def test_tool_result_surfaces_cache_token_counts() -> None:
+    """Cache read/creation tokens from the usage object should appear on the result."""
+
+    class CachingStream:
+        def __enter__(self) -> CachingStream:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def get_final_message(self) -> Any:
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input={})],
+                stop_reason="tool_use",
+                usage=SimpleNamespace(
+                    input_tokens=100,
+                    output_tokens=50,
+                    cache_read_input_tokens=800,
+                    cache_creation_input_tokens=200,
+                ),
+            )
+
+    class CachingClient:
+        messages: Any
+
+        def __init__(self) -> None:
+            self.messages = self
+
+        def stream(self, **_: Any) -> CachingStream:
+            return CachingStream()
+
+    result = call_tool(
+        client=CachingClient(),
+        model="m",
+        system="s",
+        user="u",
+        tool_name="t",
+        tool_description="d",
+        tool_schema={"type": "object"},
+    )
+    assert result.cache_read_tokens == 800
+    assert result.cache_creation_tokens == 200
