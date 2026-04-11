@@ -12,6 +12,15 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
 from franklin.assembler import (
@@ -394,40 +403,55 @@ def _run_cleanup_pass(
     )
     console.print()
 
-    done_count = 0
     total_count = len(chapters)
 
-    def on_progress(chapter: NormalizedChapter) -> None:
-        nonlocal done_count
-        done_count += 1
-        console.print(
-            f"  [green]✓[/green] [cyan]{chapter.chapter_id}[/cyan] "
-            f"[dim]({chapter.title[:60]}) — {done_count}/{total_count}[/dim]"
-        )
-
-    def on_failure(chapter: NormalizedChapter, exc: Exception) -> None:
-        nonlocal done_count
-        done_count += 1
-        console.print(
-            f"  [yellow]⚠[/yellow] [cyan]{chapter.chapter_id}[/cyan] "
-            f"cleanup failed: {exc} — keeping Tier 2 output "
-            f"[dim]({done_count}/{total_count})[/dim]"
-        )
-
-    cleaned, total_in, total_out, failed_ids = asyncio.run(
-        clean_chapters_async(
-            chapters,
-            concurrency=concurrency,
-            on_progress=on_progress,
-            on_failure=on_failure,
-        )
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]Cleaning[/bold]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("·"),
+        TimeElapsedColumn(),
+        TextColumn("·"),
+        TimeRemainingColumn(),
+        TextColumn("· [dim]{task.fields[last]}[/dim]"),
+        console=console,
+        transient=False,
     )
+
+    with progress:
+        task_id = progress.add_task("cleanup", total=total_count, last="starting…")
+
+        def on_progress(chapter: NormalizedChapter) -> None:
+            progress.update(
+                task_id,
+                advance=1,
+                last=f"✓ {chapter.chapter_id}",
+            )
+
+        def on_failure(chapter: NormalizedChapter, _exc: Exception) -> None:
+            progress.update(
+                task_id,
+                advance=1,
+                last=f"⚠ {chapter.chapter_id} failed",
+            )
+
+        cleaned, total_in, total_out, failed_ids = asyncio.run(
+            clean_chapters_async(
+                chapters,
+                concurrency=concurrency,
+                on_progress=on_progress,
+                on_failure=on_failure,
+            )
+        )
 
     console.print()
     ok_count = len(cleaned) - len(failed_ids)
+    actual_cost = (total_in / 1_000_000) * 3.0 + (total_out / 1_000_000) * 15.0
     console.print(
         f"[green]✓[/green] cleanup complete: {ok_count}/{len(cleaned)} chapters cleaned "
-        f"[dim]({total_in:,} in / {total_out:,} out tokens)[/dim]"
+        f"[dim]({total_in:,} in / {total_out:,} out tokens · "
+        f"${actual_cost:.2f})[/dim]"
     )
     if failed_ids:
         console.print(
