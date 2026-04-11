@@ -35,9 +35,16 @@ from franklin.inspector import (
     report_to_json,
 )
 from franklin.installer import InstallError, install_plugin
-from franklin.license import LicenseError, ensure_license
+from franklin.license import (
+    LicenseError,
+    LicenseHealth,
+    LicenseStatus,
+    ensure_license,
+    refresh_revocations,
+)
 from franklin.license import login as license_login
 from franklin.license import logout as license_logout
+from franklin.license import status as license_status
 from franklin.license import whoami as license_whoami
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
@@ -1582,6 +1589,118 @@ def license_whoami_command() -> None:
     console.print(f"[bold]Expires:[/bold]  {result.expires_at.isoformat()}")
     if result.jti:
         console.print(f"[bold]JTI:[/bold]      {result.jti}")
+
+
+@license_app.command("status")
+def license_status_command(
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Force a phone-home to the revocation endpoint before reporting",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the LicenseStatus as JSON for support tooling",
+    ),
+) -> None:
+    """Report operational health of the installed license.
+
+    Never raises. Reports every failure mode (no license, corrupt file,
+    expired, revoked, past hard grace) as a health level so support and
+    users can diagnose gated-command failures without digging into logs.
+    """
+    refresh_note: str | None = None
+    if refresh:
+        ok = refresh_revocations()
+        refresh_note = "refresh succeeded" if ok else "refresh failed (using cached state)"
+
+    result = license_status()
+
+    if output_json:
+        import json
+
+        payload = result.to_dict()
+        if refresh_note is not None:
+            payload["refresh"] = refresh_note
+        console.print_json(json.dumps(payload, default=str))
+        return
+
+    _print_license_status(result, refresh_note=refresh_note)
+
+
+def _print_license_status(status: LicenseStatus, *, refresh_note: str | None) -> None:
+    """Render the license status as a Rich panel with color-coded health."""
+    icon, color = _license_health_presentation(status.health)
+
+    if refresh_note is not None:
+        console.print(f"[dim]{refresh_note}[/dim]")
+
+    console.print()
+    console.print(f"{icon} [bold {color}]{status.health.value}[/bold {color}]")
+    if status.bypass_active and status.underlying_health is not None:
+        under_icon, under_color = _license_health_presentation(status.underlying_health)
+        console.print(
+            f"    [dim]underlying:[/dim] {under_icon} "
+            f"[{under_color}]{status.underlying_health.value}[/{under_color}]"
+        )
+    console.print()
+
+    if status.license is not None:
+        lic = status.license
+        console.print(f"[bold]Subject:[/bold]  {lic.subject}")
+        if lic.plan:
+            console.print(f"[bold]Plan:[/bold]     {lic.plan}")
+        console.print(
+            f"[bold]Features:[/bold] {', '.join(lic.features) if lic.features else '(none)'}"
+        )
+        console.print(
+            f"[bold]Expires:[/bold]  {lic.expires_at.isoformat()}"
+            + (
+                f"  [dim]({_relative_days(status.days_until_expiry)})[/dim]"
+                if status.days_until_expiry is not None
+                else ""
+            )
+        )
+        if lic.jti:
+            console.print(f"[bold]JTI:[/bold]      {lic.jti}")
+
+    if status.days_since_online is not None:
+        console.print(
+            f"[bold]Last online:[/bold] {status.days_since_online} day(s) ago "
+            f"[dim](band: {status.grace_band})[/dim]"
+        )
+    elif status.license is not None:
+        console.print("[bold]Last online:[/bold] [yellow]never[/yellow]")
+
+    if status.detail:
+        console.print(f"[bold]Detail:[/bold] [dim]{status.detail}[/dim]")
+
+    console.print()
+    console.print(f"[bold]Next step:[/bold] {status.next_step}")
+
+
+def _license_health_presentation(health: LicenseHealth) -> tuple[str, str]:
+    mapping: dict[LicenseHealth, tuple[str, str]] = {
+        LicenseHealth.VALID: ("[green]✓[/green]", "green"),
+        LicenseHealth.HARD_GRACE: ("[yellow]⚠[/yellow]", "yellow"),
+        LicenseHealth.BLOCKED_EXPIRED: ("[red]✗[/red]", "red"),
+        LicenseHealth.BLOCKED_REVOKED: ("[red]✗[/red]", "red"),
+        LicenseHealth.BLOCKED_HARD_GRACE: ("[red]✗[/red]", "red"),
+        LicenseHealth.BLOCKED_NO_ONLINE_CHECK: ("[red]✗[/red]", "red"),
+        LicenseHealth.NO_LICENSE: ("[dim]⚫[/dim]", "dim"),
+        LicenseHealth.CORRUPT_LICENSE: ("[red]✗[/red]", "red"),
+        LicenseHealth.BYPASS_ACTIVE: ("[yellow]⚠[/yellow]", "yellow"),
+    }
+    return mapping.get(health, ("•", "white"))
+
+
+def _relative_days(days: int) -> str:
+    if days > 0:
+        return f"in {days} days"
+    if days == 0:
+        return "today"
+    return f"{-days} days ago"
 
 
 if __name__ == "__main__":

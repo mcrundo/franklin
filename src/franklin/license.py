@@ -52,6 +52,7 @@ import os
 import stat
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -101,6 +102,69 @@ class License:
     jti: str | None
     plan: str | None
     raw_claims: dict[str, Any]
+
+
+class LicenseHealth(StrEnum):
+    """Operational health states reported by ``status``.
+
+    These map one-to-one to the next-step messaging in the CLI. They are
+    exhaustive — ``status`` never returns anything outside this set.
+    """
+
+    VALID = "valid"
+    HARD_GRACE = "hard grace"
+    BLOCKED_EXPIRED = "blocked (expired)"
+    BLOCKED_REVOKED = "blocked (revoked)"
+    BLOCKED_HARD_GRACE = "blocked (hard grace exceeded)"
+    BLOCKED_NO_ONLINE_CHECK = "blocked (no online check)"
+    NO_LICENSE = "no license installed"
+    CORRUPT_LICENSE = "corrupt license file"
+    BYPASS_ACTIVE = "bypass active"
+
+
+@dataclass(frozen=True)
+class LicenseStatus:
+    """Everything ``franklin license status`` reports, pure data.
+
+    ``license`` is the loaded license when one is installed and parses,
+    ``None`` otherwise. ``underlying_health`` only appears in bypass mode
+    so the caller can still show what would happen without bypass.
+    """
+
+    health: LicenseHealth
+    license: License | None
+    days_until_expiry: int | None
+    days_since_online: int | None
+    grace_band: str  # "fresh", "soft", "hard", "exceeded", "unknown"
+    bypass_active: bool
+    next_step: str
+    detail: str | None = None
+    underlying_health: LicenseHealth | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        license_payload: dict[str, Any] | None = None
+        if self.license is not None:
+            license_payload = {
+                "subject": self.license.subject,
+                "plan": self.license.plan,
+                "features": list(self.license.features),
+                "issued_at": self.license.issued_at.isoformat(),
+                "expires_at": self.license.expires_at.isoformat(),
+                "jti": self.license.jti,
+            }
+        return {
+            "health": self.health.value,
+            "license": license_payload,
+            "days_until_expiry": self.days_until_expiry,
+            "days_since_online": self.days_since_online,
+            "grace_band": self.grace_band,
+            "bypass_active": self.bypass_active,
+            "next_step": self.next_step,
+            "detail": self.detail,
+            "underlying_health": (
+                self.underlying_health.value if self.underlying_health else None
+            ),
+        }
 
 
 @dataclass
@@ -377,6 +441,163 @@ def _check_grace_window(state: _LocalState) -> None:
             f"franklin license has not been verified online in "
             f"{days_offline} days; please reconnect soon"
         )
+
+
+def refresh_revocations() -> bool:
+    """Force a phone-home and refresh the cached revocation list.
+
+    Returns True on a successful refresh, False if the network call
+    failed or the response was unparseable. Intended for
+    ``franklin license status --refresh``.
+    """
+    return _refresh_revocations_opportunistic(_load_state())
+
+
+def status() -> LicenseStatus:
+    """Report the operational health of the installed license.
+
+    Never raises. Every failure mode (missing file, corrupt JWT, expired,
+    revoked, past hard grace) is returned as a ``LicenseHealth`` value.
+    Pure computation — no printing, no exit, no network. Callers render
+    the returned dataclass however they like.
+    """
+    bypass_active = _bypass_active()
+
+    # Try loading the license; fall back to explicit health values on
+    # every recoverable failure.
+    license_obj: License | None
+    corrupt_detail: str | None = None
+    try:
+        license_obj = _load_license()
+    except LicenseError as exc:
+        license_obj = None
+        corrupt_detail = str(exc)
+
+    state = _load_state()
+
+    if license_obj is None and corrupt_detail is None:
+        if bypass_active:
+            return LicenseStatus(
+                health=LicenseHealth.BYPASS_ACTIVE,
+                license=None,
+                days_until_expiry=None,
+                days_since_online=_days_since(state.last_online_at),
+                grace_band=_grace_band_from_days(_days_since(state.last_online_at)),
+                bypass_active=True,
+                next_step="bypass is active via FRANKLIN_LICENSE_BYPASS; no license is installed",
+                underlying_health=LicenseHealth.NO_LICENSE,
+            )
+        return LicenseStatus(
+            health=LicenseHealth.NO_LICENSE,
+            license=None,
+            days_until_expiry=None,
+            days_since_online=_days_since(state.last_online_at),
+            grace_band="unknown",
+            bypass_active=False,
+            next_step="run `franklin license login` to install a license",
+        )
+
+    if license_obj is None:
+        # Corrupt license file
+        if bypass_active:
+            return LicenseStatus(
+                health=LicenseHealth.BYPASS_ACTIVE,
+                license=None,
+                days_until_expiry=None,
+                days_since_online=_days_since(state.last_online_at),
+                grace_band=_grace_band_from_days(_days_since(state.last_online_at)),
+                bypass_active=True,
+                next_step="bypass is active; fix the corrupt license file when you can",
+                detail=corrupt_detail,
+                underlying_health=LicenseHealth.CORRUPT_LICENSE,
+            )
+        expired = corrupt_detail is not None and "expired" in corrupt_detail.lower()
+        if expired:
+            return LicenseStatus(
+                health=LicenseHealth.BLOCKED_EXPIRED,
+                license=None,
+                days_until_expiry=None,
+                days_since_online=_days_since(state.last_online_at),
+                grace_band=_grace_band_from_days(_days_since(state.last_online_at)),
+                bypass_active=False,
+                next_step="run `franklin license login` with a fresh token",
+                detail=corrupt_detail,
+            )
+        return LicenseStatus(
+            health=LicenseHealth.CORRUPT_LICENSE,
+            license=None,
+            days_until_expiry=None,
+            days_since_online=_days_since(state.last_online_at),
+            grace_band="unknown",
+            bypass_active=False,
+            next_step="run `franklin license login` with a fresh token",
+            detail=corrupt_detail,
+        )
+
+    # Happy-ish path: license loaded and verified (not expired).
+    days_until_expiry = (license_obj.expires_at - datetime.now(tz=UTC)).days
+    days_since_online = _days_since(state.last_online_at)
+    grace_band = _grace_band_from_days(days_since_online)
+
+    # Evaluate underlying health ignoring bypass
+    revoked = license_obj.jti is not None and license_obj.jti in state.revoked_jtis
+    if revoked:
+        underlying = LicenseHealth.BLOCKED_REVOKED
+        next_step = "contact support for a replacement license"
+    elif days_since_online is None:
+        underlying = LicenseHealth.BLOCKED_NO_ONLINE_CHECK
+        next_step = "run `franklin license status --refresh` while connected"
+    elif days_since_online > _GRACE_HARD_DAYS:
+        underlying = LicenseHealth.BLOCKED_HARD_GRACE
+        next_step = "run `franklin license status --refresh` while connected"
+    elif days_since_online > _GRACE_SOFT_DAYS:
+        underlying = LicenseHealth.HARD_GRACE
+        next_step = (
+            f"license has been offline for {days_since_online} days; "
+            "reconnect soon or gated commands will stop working"
+        )
+    else:
+        underlying = LicenseHealth.VALID
+        next_step = "no action required"
+
+    if bypass_active:
+        return LicenseStatus(
+            health=LicenseHealth.BYPASS_ACTIVE,
+            license=license_obj,
+            days_until_expiry=days_until_expiry,
+            days_since_online=days_since_online,
+            grace_band=grace_band,
+            bypass_active=True,
+            next_step="bypass is active via FRANKLIN_LICENSE_BYPASS; "
+            "underlying license health reported below",
+            underlying_health=underlying,
+        )
+
+    return LicenseStatus(
+        health=underlying,
+        license=license_obj,
+        days_until_expiry=days_until_expiry,
+        days_since_online=days_since_online,
+        grace_band=grace_band,
+        bypass_active=False,
+        next_step=next_step,
+    )
+
+
+def _days_since(moment: datetime | None) -> int | None:
+    if moment is None:
+        return None
+    return (datetime.now(tz=UTC) - moment).days
+
+
+def _grace_band_from_days(days_since_online: int | None) -> str:
+    if days_since_online is None:
+        return "unknown"
+    if days_since_online <= _GRACE_SOFT_DAYS:
+        return "fresh"
+    if days_since_online <= _GRACE_HARD_DAYS:
+        return "hard"
+    return "exceeded"
 
 
 def _emit_warning(message: str) -> None:
