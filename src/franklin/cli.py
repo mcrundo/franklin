@@ -389,6 +389,12 @@ def reduce_pipeline(
         "-a",
         help="Generate just this artifact id",
     ),
+    type_filter: str | None = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Generate only artifacts of this type (skill, reference, command, agent)",
+    ),
     model: str = typer.Option(
         REDUCER_DEFAULT_MODEL, "--model", help="Anthropic model ID for generation"
     ),
@@ -414,7 +420,7 @@ def reduce_pipeline(
         raise typer.Exit(code=1)
     sidecars = {cid: run.load_sidecar(cid) for cid in sidecar_ids}
 
-    targets = _select_artifacts(plan, artifact)
+    targets = _select_artifacts(plan, artifact, type_filter)
     if not targets:
         console.print("[yellow]no artifacts to generate[/yellow]")
         raise typer.Exit(code=0)
@@ -431,17 +437,34 @@ def reduce_pipeline(
     )
 
 
-def _select_artifacts(plan: PlanManifest, artifact_id: str | None) -> list[Artifact]:
-    if artifact_id is None:
-        return list(plan.artifacts)
-    for art in plan.artifacts:
-        if art.id == artifact_id:
-            return [art]
-    console.print(
-        f"[red]error:[/red] no artifact with id {artifact_id!r} in plan "
-        f"(available: {', '.join(a.id for a in plan.artifacts)})"
-    )
-    raise typer.Exit(code=1)
+def _select_artifacts(
+    plan: PlanManifest,
+    artifact_id: str | None,
+    type_filter: str | None,
+) -> list[Artifact]:
+    if artifact_id is not None:
+        for art in plan.artifacts:
+            if art.id == artifact_id:
+                return [art]
+        console.print(
+            f"[red]error:[/red] no artifact with id {artifact_id!r} in plan "
+            f"(available: {', '.join(a.id for a in plan.artifacts)})"
+        )
+        raise typer.Exit(code=1)
+
+    if type_filter is not None:
+        try:
+            kind = ArtifactType(type_filter)
+        except ValueError:
+            valid = ", ".join(t.value for t in ArtifactType)
+            console.print(
+                f"[red]error:[/red] unknown artifact type {type_filter!r} "
+                f"(valid: {valid})"
+            )
+            raise typer.Exit(code=1) from None
+        return [a for a in plan.artifacts if a.type == kind]
+
+    return list(plan.artifacts)
 
 
 def _generate_artifacts(
