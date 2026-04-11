@@ -10,6 +10,7 @@ from franklin.llm.client import (
     text_block,
 )
 from franklin.llm.prompts import load_prompt, render_prompt
+from franklin.llm.validation import validate_with_extra_recovery
 
 __all__ = [
     "ToolResult",
@@ -21,4 +22,5 @@ __all__ = [
     "make_client",
     "render_prompt",
     "text_block",
+    "validate_with_extra_recovery",
 ]

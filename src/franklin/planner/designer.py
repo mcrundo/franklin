@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from franklin.checkpoint import slugify
-from franklin.llm import call_tool, make_client, render_prompt
+from franklin.llm import call_tool, make_client, render_prompt, validate_with_extra_recovery
 from franklin.llm.client import DEFAULT_MAX_TOKENS
 from franklin.schema import (
     BookManifest,
@@ -75,7 +75,11 @@ def design_plan(
     )
 
     try:
-        proposal = PlanProposal.model_validate(result.input)
+        proposal = validate_with_extra_recovery(
+            PlanProposal,
+            result.input,
+            label="planner",
+        )
     except ValidationError as exc:
         raise RuntimeError(f"planner returned invalid proposal: {exc}") from exc
 

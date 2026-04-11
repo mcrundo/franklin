@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Map stage no longer dies on a single stray LLM field. The `ChapterExtraction` validator stays strict on required fields and types, but now strips `extra_forbidden` keys (and logs them) before retrying — so an LLM slip like `source_quote` on a `Principle` doesn't blow up an entire chapter's extraction work.
+- Map and plan stages no longer die on a single stray LLM field. A new shared `validate_with_extra_recovery` helper keeps the outgoing tool schemas strict (`additionalProperties: false`) but, on validation, strips `extra_forbidden` keys and retries — so an LLM slip like `source_quote` on a `Principle` doesn't blow up a chapter's extraction work or wipe out an entire plan call. Stripped fields are logged so drift stays visible.
+- Reduce stage now warns when an artifact's `feeds_from` references chapters or fields that didn't resolve (planner hallucination, partial run, or a chapter the user deselected at Gate 1). Previously the unresolved paths were collected and silently ignored, shipping a degraded artifact without surfacing the missing context.
 
 ## [0.1.0] - 2026-04-11
 

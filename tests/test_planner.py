@@ -230,3 +230,42 @@ def test_design_plan_rejects_invalid_proposal() -> None:
     client = _FakeClient(bad)
     with pytest.raises(RuntimeError, match="invalid proposal"):
         design_plan(_book(), [_sidecar("ch04")], client=client)
+
+
+def test_design_plan_recovers_from_stray_extra_field(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Same recovery as the mapper: a single stray field on a sub-object
+    shouldn't kill an entire plan call. The plan stage is one big LLM
+    call so this matters more than the per-chapter map case."""
+    payload = {
+        "plugin": {
+            "name": "layered-rails",
+            "version": "0.1.0",
+            "description": "Layered design for Rails apps",
+            "keywords": ["rails"],
+        },
+        "planner_rationale": "Test recovery from stray field.",
+        "artifacts": [
+            {
+                "id": "art.skill.root",
+                "type": "skill",
+                "path": "skills/layered-rails/SKILL.md",
+                "brief": "Router",
+                "feeds_from": ["book.metadata", "ch04.concepts"],
+                "estimated_output_tokens": 3000,
+                "rogue_field": "the LLM made this up",
+            }
+        ],
+        "coherence_rules": [],
+        "skipped_artifact_types": [],
+        "estimated_total_output_tokens": 3000,
+        "estimated_reduce_calls": 1,
+    }
+    client = _FakeClient(payload)
+
+    with caplog.at_level("WARNING", logger="franklin.llm.validation"):
+        plan, _, _ = design_plan(_book(), [_sidecar("ch04")], client=client)
+
+    assert plan.artifacts[0].id == "art.skill.root"
+    assert any("rogue_field" in r.message for r in caplog.records)
