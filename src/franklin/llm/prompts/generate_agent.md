@@ -50,7 +50,16 @@ Target length: the brief will include an estimated token count (typically 2500�
 4. **Cite reference files** for specific rules or patterns. See the plugin file tree below for the only valid link targets.
 5. **One agent, one job.** Do not bundle reviewer and planner behavior into one agent — if the plan has both, generate both as separate files.
 6. **Frontmatter is required with the plugin-prefixed name.**
-7. **No placeholders in output — especially in Output Format examples.** Your generated agent file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<command name>`, `<relative path to reference>`, `<reference file name>`, etc). When showing an example output format in the agent's body, use **real** file paths from the plugin tree below and **real** command/reference names — not descriptive placeholders like `<relative path to X>`. If the example would be less clear with real values, describe it in prose instead of pretending to show a link.
+7. **No placeholders in output — especially in Output Format examples.** Your generated agent file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<command name>`, `<relative path to reference>`, `<reference file name>`, etc).
+
+   **Important corollary for format templates:** when you show an example of the agent's output format — a "findings table," an "extraction roadmap template," a "report skeleton," etc — **never use markdown link syntax** (`[text](path.md)`) for illustrative filenames. The link will resolve at assemble time and either point to a nonexistent file (broken) or to the wrong file (misleading). Instead, use **inline code spans** with backticks for any illustrative filename, command, or path:
+
+   - ✗ wrong — creates a broken or misleading link:
+     `**Reference:** [../skills/layered-rails/references/patterns/pattern-name.md](../skills/layered-rails/references/patterns/pattern-name.md)`
+   - ✓ right — illustrative, not a real link:
+     `` **Reference:** `references/patterns/<pattern-name>.md` `` or `` **Command:** `/<command-name>` ``
+
+   Real markdown links in an agent file should only appear when the target is a specific, concrete file in the plugin tree below that the agent will actually reference at runtime — never as part of an example or template skeleton.
 
 ## Full plugin file tree
 
