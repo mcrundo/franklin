@@ -128,6 +128,50 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
     return RunDirectory(Path.cwd() / "runs" / slug)
 
 
+def _maybe_confirm_metadata(manifest: BookManifest, *, skip: bool) -> None:
+    """Show detected metadata and ask the user to confirm or edit.
+
+    EPUB metadata is notoriously wrong (especially for PDFs heuristically
+    repackaged into EPUBs by scanning services). Surfacing it here gives
+    the user a chance to correct title and author before the map stage
+    turns those values into plugin identifiers that are hard to change.
+
+    Skipped entirely in non-interactive contexts (no TTY) and when
+    ``--yes`` is passed, so scripted ingests never block.
+    """
+    import sys
+
+    if skip or not sys.stdin.isatty():
+        return
+
+    console.print()
+    console.print("[bold]Detected metadata[/bold]")
+    console.print(f"  Title:   [cyan]{manifest.metadata.title}[/cyan]")
+    authors = ", ".join(manifest.metadata.authors) if manifest.metadata.authors else "(unknown)"
+    console.print(f"  Authors: [cyan]{authors}[/cyan]")
+    if manifest.metadata.publisher:
+        console.print(f"  Publisher: [dim]{manifest.metadata.publisher}[/dim]")
+    if manifest.metadata.published:
+        console.print(f"  Published: [dim]{manifest.metadata.published}[/dim]")
+    console.print()
+
+    if typer.confirm("Is this correct?", default=True):
+        return
+
+    new_title = typer.prompt("  Title", default=manifest.metadata.title)
+    authors_str = ", ".join(manifest.metadata.authors)
+    new_authors_raw = typer.prompt(
+        "  Authors (comma-separated)", default=authors_str or "(unknown)"
+    )
+
+    manifest.metadata.title = new_title.strip() or manifest.metadata.title
+    new_authors = [
+        a.strip() for a in new_authors_raw.split(",") if a.strip() and a.strip() != "(unknown)"
+    ]
+    manifest.metadata.authors = new_authors
+    console.print(f"[green]✓[/green] updated to [cyan]{manifest.metadata.title}[/cyan]")
+
+
 def _print_run_estimate(book_path: Path, *, include_cleanup: bool) -> None:
     """Parse the book locally and render a Rich table of predicted cost."""
     console.rule(f"[bold]franklin run --estimate[/bold] — {book_path.name}")
@@ -251,6 +295,12 @@ def ingest(
         min=1,
         max=32,
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive metadata confirmation prompt",
+    ),
 ) -> None:
     """Parse a book file (EPUB or PDF) into normalized chapters and a partial book.json."""
     run = _resolve_run_dir(book_path, output)
@@ -272,6 +322,8 @@ def ingest(
     except UnsupportedFormatError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+    _maybe_confirm_metadata(manifest, skip=yes)
 
     if clean:
         chapters = _run_cleanup_pass(chapters, concurrency=clean_concurrency)
@@ -1385,7 +1437,17 @@ def run_pipeline(
     console.print()
 
     stages: list[tuple[str, Callable[[], None]]] = [
-        ("ingest", lambda: ingest(book_path=book_path, output=run.root)),
+        (
+            "ingest",
+            lambda: ingest(
+                book_path=book_path,
+                output=run.root,
+                yes_i_know_pdfs=False,
+                clean=False,
+                clean_concurrency=8,
+                yes=yes,
+            ),
+        ),
         (
             "map",
             lambda: map_chapters(
