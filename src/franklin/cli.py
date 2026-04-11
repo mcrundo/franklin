@@ -941,6 +941,121 @@ def _print_frontmatter_issues(plugin_root: Path, issues: list[FrontmatterIssue])
     console.print(table)
 
 
+@app.command(name="grade")
+def grade_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory to grade"
+    ),
+    output_json: bool = typer.Option(
+        False, "--json", help="Emit the RunGrade as JSON instead of a Rich report"
+    ),
+) -> None:
+    """Grade an assembled run and print a detailed report.
+
+    Local diagnostic only — no LLM, no network, no writes. Re-runs every
+    validator fresh so hand-edits and post-hoc regenerations are reflected
+    immediately. Exit code is always 0 regardless of grade; the command
+    reports, it doesn't gate.
+    """
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(
+            f"[red]error:[/red] no assembled plugin tree at {plugin_root} — "
+            "run `franklin assemble` first"
+        )
+        raise typer.Exit(code=1)
+
+    grade = grade_run(run_dir)
+
+    if output_json:
+        import json
+
+        console.print_json(json.dumps(grade.to_metrics_dict(), default=str))
+        return
+
+    _print_detailed_grade_report(grade, plan_name=plan.plugin.name)
+
+
+def _print_detailed_grade_report(grade: RunGrade, *, plan_name: str) -> None:
+    """Render a full per-artifact breakdown for the grade command."""
+    letter_color = {
+        "A": "bold green",
+        "A-": "bold green",
+        "B+": "green",
+        "B": "green",
+        "B-": "yellow",
+        "C+": "yellow",
+        "C": "yellow",
+        "C-": "yellow",
+        "D": "red",
+        "F": "bold red",
+    }.get(grade.letter, "white")
+
+    console.print()
+    console.print(f"[bold]Plugin:[/bold] [cyan]{plan_name}[/cyan]")
+    console.print(
+        f"[bold]Grade:[/bold]  [{letter_color}]{grade.letter}[/{letter_color}] "
+        f"([cyan]{int(grade.composite_score * 100)}/100[/cyan])"
+    )
+    console.print()
+    console.print("[bold]Validation[/bold]")
+    v = grade.validator_totals
+    for label, count in (
+        ("broken links", v.broken_links),
+        ("template leaks", v.template_leaks),
+        ("frontmatter issues", v.frontmatter_issues),
+    ):
+        icon = "[green]✓[/green]" if count == 0 else "[red]✗[/red]"
+        console.print(f"  {icon} {count} {label}")
+    console.print()
+
+    wired = sum(1 for g in grade.artifact_grades if g.score > 0)
+    console.print("[bold]Coverage[/bold]")
+    console.print(
+        f"  {wired}/{len(grade.artifact_grades)} artifacts graded, "
+        f"feeds_from coverage: [cyan]{grade.coverage_fraction:.0%}[/cyan]"
+    )
+    console.print()
+
+    if grade.artifact_grades:
+        console.print(f"[bold]Artifacts ({len(grade.artifact_grades)})[/bold]")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Path", overflow="fold", style="cyan")
+        table.add_column("Grade", justify="center")
+        table.add_column("Score", justify="right")
+        table.add_column("Missed checks", overflow="fold", style="dim")
+        for g in grade.artifact_grades:
+            total = len(g.checks) or 1
+            passed = sum(1 for c in g.checks if c.passed)
+            missed = ", ".join(g.failed_checks) if g.failed_checks else ""
+            table.add_row(g.path, g.letter, f"{passed}/{total}", missed)
+        console.print(table)
+        console.print()
+
+    lowest = [g for g in grade.lowest_graded if g.score < 1.0]
+    if lowest:
+        console.print("[bold]Lowest grades[/bold]")
+        for rank, g in enumerate(lowest, start=1):
+            console.print(f"  {rank}. {g.path:<48} [dim]{g.letter}[/dim]")
+        console.print()
+        console.print("[bold]Suggested next steps[/bold]")
+        for g in lowest:
+            console.print(
+                f"  [cyan]franklin reduce {grade.run_dir} "
+                f"--artifact {g.artifact_id} --force[/cyan]"
+            )
+        console.print()
+
+    if grade.failed_stages:
+        console.print(f"[red]Failed stages:[/red] {', '.join(grade.failed_stages)}")
+
+
 @app.command(name="inspect")
 def inspect_command(
     run_dir: Path = typer.Argument(
