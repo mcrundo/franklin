@@ -15,3 +15,7 @@ runs/
 *.epub
 *.pdf
 *.mobi
+
+# Test fixtures are generated files, not source material — allow them
+!tests/fixtures/*.pdf
+!tests/fixtures/*.epub

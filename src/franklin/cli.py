@@ -25,7 +25,7 @@ from franklin.assembler import (
 )
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
-from franklin.ingest import ingest_epub
+from franklin.ingest import UnsupportedFormatError, ingest_book
 from franklin.installer import InstallError, install_plugin
 from franklin.license import LicenseError, ensure_license
 from franklin.license import login as license_login
@@ -100,17 +100,31 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
 
 @app.command()
 def ingest(
-    book_path: Path = typer.Argument(..., exists=True, readable=True, help="Path to .epub"),
+    book_path: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Path to .epub or .pdf"
+    ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Run directory (default: ./runs/<slug>)"
     ),
+    yes_i_know_pdfs: bool = typer.Option(
+        False,
+        "--yes-i-know-pdfs",
+        help="Suppress the PDF quality-caveat warning",
+    ),
 ) -> None:
-    """Parse an EPUB into normalized chapters and a partial book.json."""
+    """Parse a book file (EPUB or PDF) into normalized chapters and a partial book.json."""
     run = _resolve_run_dir(book_path, output)
     run.ensure()
 
+    if book_path.suffix.lower() == ".pdf" and not yes_i_know_pdfs:
+        _print_pdf_warning()
+
     console.print(f"[bold]Ingesting[/bold] {book_path}")
-    manifest, chapters = ingest_epub(book_path)
+    try:
+        manifest, chapters = ingest_book(book_path)
+    except UnsupportedFormatError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     classifications = classify_chapters(chapters)
     for toc_entry in manifest.structure.toc:
@@ -124,6 +138,23 @@ def ingest(
         run.save_raw_chapter(chapter)
 
     _print_ingest_summary(run, manifest, chapters)
+
+
+def _print_pdf_warning() -> None:
+    console.print()
+    console.print("[yellow]⚠ PDF support is experimental[/yellow]")
+    console.print()
+    console.print("  Franklin extracts PDFs using layout-aware heuristics. Quality depends")
+    console.print("  heavily on the source PDF's structure. Common issues:")
+    console.print()
+    console.print("    - Code blocks may lose indentation if not set in a monospace font")
+    console.print("    - Multi-column layouts may be jumbled")
+    console.print("    - Chapter boundaries are taken from the PDF outline when available,")
+    console.print("      otherwise inferred heuristically from font sizes")
+    console.print()
+    console.print("  For best results, prefer the EPUB edition when available. To suppress")
+    console.print("  this warning for automation, re-run with [cyan]--yes-i-know-pdfs[/cyan].")
+    console.print()
 
 
 _KIND_STYLES: dict[ChapterKind, str] = {
