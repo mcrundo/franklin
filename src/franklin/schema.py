@@ -15,7 +15,7 @@ File layout inside a run directory:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -351,6 +351,24 @@ class SkippedArtifact(_Base):
     reason: str
 
 
+class PlanProposal(_Base):
+    """LLM-produced plan proposal, merged with run metadata into PlanManifest.
+
+    Only contains fields the planner actually designs — book_id,
+    generated_at, and planner_model are backfilled server-side so the
+    tool-use schema stays focused on the architectural decisions the
+    model is there to make.
+    """
+
+    plugin: PluginMeta
+    planner_rationale: str
+    artifacts: list[Artifact] = Field(default_factory=list)
+    coherence_rules: list[str] = Field(default_factory=list)
+    skipped_artifact_types: list[SkippedArtifact] = Field(default_factory=list)
+    estimated_total_output_tokens: int = 0
+    estimated_reduce_calls: int = 0
+
+
 class PlanManifest(_Base):
     """The output of the plan stage — the contract the reduce stage consumes."""
 
@@ -366,6 +384,27 @@ class PlanManifest(_Base):
 
     estimated_total_output_tokens: int = 0
     estimated_reduce_calls: int = 0
+
+    @classmethod
+    def from_proposal(
+        cls,
+        proposal: PlanProposal,
+        *,
+        book_id: str,
+        planner_model: str,
+    ) -> PlanManifest:
+        return cls(
+            book_id=book_id,
+            generated_at=datetime.now(UTC),
+            planner_model=planner_model,
+            planner_rationale=proposal.planner_rationale,
+            plugin=proposal.plugin,
+            artifacts=proposal.artifacts,
+            coherence_rules=proposal.coherence_rules,
+            skipped_artifact_types=proposal.skipped_artifact_types,
+            estimated_total_output_tokens=proposal.estimated_total_output_tokens,
+            estimated_reduce_calls=proposal.estimated_reduce_calls,
+        )
 
 
 # ---------------------------------------------------------------------------
