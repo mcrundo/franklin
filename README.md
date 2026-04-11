@@ -93,6 +93,19 @@ claude plugin install owner/name
 
 `franklin push` is license-gated; `franklin install` is free. Use `franklin license status` to check your license state at any time, or `franklin license login` to install a JWT.
 
+## Advisor strategy (Opus advises, Sonnet executes)
+
+Franklin uses the [advisor pattern](https://algoinsights.medium.com/the-advisor-strategy-how-to-get-claude-opus-intelligence-without-opus-prices-bfd17bbed96b) to get Opus-quality output at roughly Sonnet prices: a single expensive Opus call produces a high-leverage *plan*, and many cheap Sonnet calls *execute* that plan one artifact at a time.
+
+Concretely:
+
+- **`plan` (Opus)** runs once per run and outputs `plan.json` — the full plugin architecture, artifact list, and per-file `feeds_from` wiring. This is the advisory call; it thinks holistically about the book and the plugin shape.
+- **`reduce` (Sonnet)** runs N times — once per artifact — and generates each file using the brief Opus wrote. Sonnet never has to reason about the architecture; it just fills in a well-scoped plan.
+
+For a typical 28-artifact run that translates to **1× Opus + 28× Sonnet** instead of **29× Opus**. In dollar terms that's roughly `$0.30 + 28 × $0.20 ≈ $5.90` vs `29 × $1.00 ≈ $29.00` — the same output quality for about 20% of the cost. `map` and `cleanup` similarly use Sonnet since they're per-chapter executions of a well-defined extraction prompt, not architectural decisions.
+
+The tradeoff is that Opus's advisory call is a single point of failure: if the plan is wrong, all 28 reduces inherit the mistake. `franklin review <run-dir>` pauses between plan and reduce so you can prune or redirect the plan before paying for execution — that's the human-in-the-loop half of the pattern.
+
 ## Cost and performance
 
 - **`franklin run --estimate`** predicts per-stage token counts and dollar cost from a parsed `BookManifest` before any paid calls. Lean pessimistic — real runs should come in at or below the estimate.
