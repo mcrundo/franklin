@@ -11,6 +11,8 @@ from franklin.checkpoint import RunDirectory
 from franklin.picker import (
     ALL_FORMATS,
     DEFAULT_FORMATS,
+    _parse_filename_metadata,
+    _read_epub_opf_metadata,
     default_search_dirs,
     discover_books,
 )
@@ -256,3 +258,115 @@ def test_default_formats_is_epub_only() -> None:
 def test_all_formats_includes_pdf() -> None:
     assert ".epub" in ALL_FORMATS
     assert ".pdf" in ALL_FORMATS
+
+
+# ---------------------------------------------------------------------------
+# filename metadata parser
+# ---------------------------------------------------------------------------
+
+
+def test_parse_filename_author_title_year() -> None:
+    meta = _parse_filename_metadata("Sandi Metz - Practical OO Design (2018)")
+    assert meta == {"author": "Sandi Metz", "title": "Practical OO Design", "year": "2018"}
+
+
+def test_parse_filename_author_title_no_year() -> None:
+    meta = _parse_filename_metadata("Sandi Metz - Practical OO Design")
+    assert meta == {"author": "Sandi Metz", "title": "Practical OO Design"}
+
+
+def test_parse_filename_title_only() -> None:
+    meta = _parse_filename_metadata("Refactoring")
+    assert meta == {"title": "Refactoring"}
+
+
+def test_parse_filename_title_with_year() -> None:
+    meta = _parse_filename_metadata("Refactoring (1999)")
+    assert meta == {"title": "Refactoring", "year": "1999"}
+
+
+def test_parse_filename_loose_year_fallback() -> None:
+    meta = _parse_filename_metadata("Rails 2020 Guide")
+    assert meta.get("year") == "2020"
+
+
+def test_parse_filename_empty_stem() -> None:
+    assert _parse_filename_metadata("") == {}
+
+
+# ---------------------------------------------------------------------------
+# EPUB OPF metadata reader
+# ---------------------------------------------------------------------------
+
+
+def _write_minimal_epub(
+    path: Path,
+    *,
+    title: str = "Test Book",
+    author: str = "Ada Lovelace",
+    date: str = "2021-05-01",
+) -> None:
+    import zipfile
+
+    container_xml = (
+        '<?xml version="1.0"?>'
+        '<container version="1.0" '
+        'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        "<rootfiles>"
+        '<rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/>'
+        "</rootfiles></container>"
+    )
+    opf_xml = (
+        '<?xml version="1.0"?>'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        f"<dc:title>{title}</dc:title>"
+        f"<dc:creator>{author}</dc:creator>"
+        f"<dc:date>{date}</dc:date>"
+        "</metadata></package>"
+    )
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr("META-INF/container.xml", container_xml)
+        zf.writestr("OEBPS/content.opf", opf_xml)
+
+
+def test_read_epub_opf_metadata_happy_path(tmp_path: Path) -> None:
+    epub = tmp_path / "book.epub"
+    _write_minimal_epub(epub, title="Real Title", author="Real Author", date="2019-06-15")
+    meta = _read_epub_opf_metadata(epub)
+    assert meta == {"title": "Real Title", "author": "Real Author", "year": "2019"}
+
+
+def test_discover_books_uses_epub_metadata(tmp_path: Path) -> None:
+    library = tmp_path / "books"
+    library.mkdir()
+    _write_minimal_epub(
+        library / "whatever.epub",
+        title="Opus",
+        author="Author Name",
+        date="2015",
+    )
+    results = discover_books([library], runs_base=tmp_path / "runs")
+    assert len(results) == 1
+    c = results[0]
+    assert c.title == "Opus"
+    assert c.author == "Author Name"
+    assert c.year == "2015"
+    # display_name prefers metadata title over filename stem
+    assert c.display_name == "Opus"
+
+
+def test_discover_books_falls_back_to_filename(tmp_path: Path) -> None:
+    library = tmp_path / "books"
+    library.mkdir()
+    # Not a real zip — epub reader should fail gracefully and filename
+    # parser should still fill in what it can.
+    (library / "Jane Doe - Some Book (2022).epub").write_bytes(b"not a real epub")
+    results = discover_books([library], runs_base=tmp_path / "runs")
+    assert len(results) == 1
+    c = results[0]
+    assert c.author == "Jane Doe"
+    assert c.title == "Some Book"
+    assert c.year == "2022"

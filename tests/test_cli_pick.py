@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from franklin.cli import _prompt_pick_candidate, _questionary_pick
+from franklin.checkpoint import RunDirectory
+from franklin.cli import _prompt_pick_candidate, _questionary_pick, _select_targets
 from franklin.picker import BookCandidate
+from franklin.schema import (
+    BookManifest,
+    BookMetadata,
+    BookSource,
+    BookStructure,
+    ChapterKind,
+    NormalizedChapter,
+    TocEntry,
+)
 
 
 def _candidate(name: str = "book", runs_base: Path | None = None) -> BookCandidate:
@@ -82,3 +93,91 @@ def test_questionary_pick_returns_none_on_cancel() -> None:
         result = _questionary_pick(candidates)
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Gate 1: chapter selection file round-trip + _select_targets honoring it
+# ---------------------------------------------------------------------------
+
+
+def _seed_run_dir(root: Path, n_chapters: int = 4) -> RunDirectory:
+    run = RunDirectory(root)
+    run.ensure()
+    toc = [
+        TocEntry(
+            id=f"ch{i:02d}",
+            title=f"Chapter {i}",
+            source_ref=f"pp.{i}",
+            kind=ChapterKind.CONTENT,
+            word_count=1000,
+        )
+        for i in range(1, n_chapters + 1)
+    ]
+    manifest = BookManifest(
+        franklin_version="0.1.0",
+        source=BookSource(
+            path=str(root / "book.epub"),
+            sha256="0" * 64,
+            format="epub",
+            ingested_at=datetime.now(UTC),
+        ),
+        metadata=BookMetadata(title="Test", authors=["Ada"]),
+        structure=BookStructure(toc=toc),
+    )
+    run.save_book(manifest)
+    for i in range(1, n_chapters + 1):
+        run.save_raw_chapter(
+            NormalizedChapter(
+                chapter_id=f"ch{i:02d}",
+                title=f"Chapter {i}",
+                order=i,
+                source_ref=f"pp.{i}",
+                word_count=1000,
+                text="lorem ipsum",
+            )
+        )
+    return run
+
+
+def test_map_selection_round_trip(tmp_path: Path) -> None:
+    run = _seed_run_dir(tmp_path / "run")
+    assert run.load_map_selection() is None
+
+    run.save_map_selection(["ch01", "ch03"])
+    assert run.load_map_selection() == ["ch01", "ch03"]
+    assert run.map_selection_json.exists()
+
+
+def test_map_selection_ignores_corrupt_file(tmp_path: Path) -> None:
+    run = _seed_run_dir(tmp_path / "run")
+    run.map_selection_json.write_text("not json")
+    assert run.load_map_selection() is None
+
+
+def test_select_targets_honors_map_selection(tmp_path: Path) -> None:
+    run = _seed_run_dir(tmp_path / "run", n_chapters=4)
+    run.save_map_selection(["ch02", "ch04"])
+
+    manifest = run.load_book()
+    targets = _select_targets(run, manifest, chapter_id=None)
+    ids = [c.chapter_id for c in targets]
+    assert ids == ["ch02", "ch04"]
+
+
+def test_select_targets_without_map_selection_returns_all(tmp_path: Path) -> None:
+    run = _seed_run_dir(tmp_path / "run", n_chapters=3)
+    manifest = run.load_book()
+    targets = _select_targets(run, manifest, chapter_id=None)
+    ids = [c.chapter_id for c in targets]
+    assert ids == ["ch01", "ch02", "ch03"]
+
+
+def test_select_targets_single_chapter_ignores_map_selection(tmp_path: Path) -> None:
+    """The --chapter flag is a per-invocation override and bypasses the
+    persisted selection entirely."""
+    run = _seed_run_dir(tmp_path / "run", n_chapters=4)
+    run.save_map_selection(["ch01"])
+    manifest = run.load_book()
+    targets = _select_targets(run, manifest, chapter_id="ch03")
+    ids = [c.chapter_id for c in targets]
+    assert ids == ["ch03"]

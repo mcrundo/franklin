@@ -13,8 +13,11 @@ testable without touching typer or Rich.
 from __future__ import annotations
 
 import os
+import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from franklin.checkpoint import RunSummary, slugify, summarize_run
 
@@ -32,6 +35,9 @@ class BookCandidate:
     size_bytes: int
     run_slug: str
     existing_run: RunSummary | None
+    title: str | None = None
+    author: str | None = None
+    year: str | None = None
 
     @property
     def is_processed(self) -> bool:
@@ -39,7 +45,7 @@ class BookCandidate:
 
     @property
     def display_name(self) -> str:
-        return self.path.stem
+        return self.title or self.path.stem
 
     @property
     def extension(self) -> str:
@@ -145,15 +151,155 @@ def discover_books(
             size = path.stat().st_size
         except OSError:
             size = 0
+        meta = _read_book_metadata(path)
         candidates.append(
             BookCandidate(
                 path=path,
                 size_bytes=size,
                 run_slug=slug,
                 existing_run=existing,
+                title=meta.get("title"),
+                author=meta.get("author"),
+                year=meta.get("year"),
             )
         )
     return candidates
+
+
+# ---------------------------------------------------------------------------
+# Metadata extraction for the picker
+# ---------------------------------------------------------------------------
+
+
+def _read_book_metadata(path: Path) -> dict[str, str]:
+    """Return title/author/year for a book file, filling gaps from the filename.
+
+    For EPUBs we crack the zip open and read only the OPF metadata block —
+    cheap enough to run for every candidate in a scan of hundreds of files,
+    and it avoids the full ebooklib parse which loads every chapter. For
+    other formats we have no structured metadata, so we parse the filename.
+
+    Always returns a dict (possibly empty); callers treat missing keys as
+    "unknown". Any parse error is swallowed — a picker must never crash on
+    a corrupt file, it just shows fewer columns for that row.
+    """
+    epub_meta: dict[str, str] = {}
+    if path.suffix.lower() == ".epub":
+        try:
+            epub_meta = _read_epub_opf_metadata(path)
+        except Exception:
+            epub_meta = {}
+
+    filename_meta = _parse_filename_metadata(path.stem)
+    merged: dict[str, str] = {}
+    for key in ("title", "author", "year"):
+        value = epub_meta.get(key) or filename_meta.get(key)
+        if value:
+            merged[key] = value
+    return merged
+
+
+_DC_NS = "{http://purl.org/dc/elements/1.1/}"
+_CONTAINER_NS = "{urn:oasis:names:tc:opendocument:xmlns:container}"
+
+
+def _read_epub_opf_metadata(path: Path) -> dict[str, str]:
+    """Parse dc:title / dc:creator / dc:date from an EPUB's OPF package.
+
+    Only the OPF is read — not the spine, manifest, or any chapter XHTML —
+    so this stays fast even over a library of hundreds of books.
+    """
+    with zipfile.ZipFile(path) as zf:
+        try:
+            container = zf.read("META-INF/container.xml")
+        except KeyError:
+            return {}
+        root = ET.fromstring(container)
+        rootfile = root.find(f".//{_CONTAINER_NS}rootfile")
+        if rootfile is None:
+            return {}
+        opf_path = rootfile.get("full-path")
+        if not opf_path:
+            return {}
+        try:
+            opf_bytes = zf.read(opf_path)
+        except KeyError:
+            return {}
+
+    opf_root = ET.fromstring(opf_bytes)
+    out: dict[str, str] = {}
+
+    title_el = opf_root.find(f".//{_DC_NS}title")
+    if title_el is not None and (title_el.text or "").strip():
+        out["title"] = (title_el.text or "").strip()
+
+    creator_el = opf_root.find(f".//{_DC_NS}creator")
+    if creator_el is not None and (creator_el.text or "").strip():
+        out["author"] = (creator_el.text or "").strip()
+
+    date_el = opf_root.find(f".//{_DC_NS}date")
+    if date_el is not None:
+        year = _extract_year(date_el.text or "")
+        if year:
+            out["year"] = year
+
+    return out
+
+
+_FILENAME_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_YEAR_IN_PARENS_RE = re.compile(r"[\(\[\{]\s*((?:19|20)\d{2})\s*[\)\]\}]")
+
+
+def _parse_filename_metadata(stem: str) -> dict[str, str]:
+    """Extract author/title/year from common filename patterns.
+
+    Handles the two conventions that cover most real-world epub libraries:
+
+        ``Author - Title`` / ``Author - Title (Year)``
+        ``Title (Year)`` (no author)
+
+    When an author is present it is distinguished from a title by position
+    (left of the first `` - ``). Years are pulled out of parentheses first,
+    then any loose 4-digit year as a fallback. This is intentionally
+    conservative — if the filename doesn't look like one of these shapes
+    we return the whole stem as the title and leave author/year empty.
+    """
+    out: dict[str, str] = {}
+    working = stem.strip()
+
+    year_match = _YEAR_IN_PARENS_RE.search(working)
+    if year_match:
+        out["year"] = year_match.group(1)
+        working = (working[: year_match.start()] + working[year_match.end() :]).strip()
+    else:
+        loose = _FILENAME_YEAR_RE.search(working)
+        if loose:
+            out["year"] = loose.group(0)
+
+    # Strip any trailing empty parens left after year removal.
+    working = re.sub(r"[\(\[\{]\s*[\)\]\}]", "", working).strip()
+    working = re.sub(r"\s{2,}", " ", working)
+
+    if " - " in working:
+        left, _, right = working.partition(" - ")
+        left = left.strip()
+        right = right.strip()
+        if left and right:
+            out["author"] = left
+            out["title"] = right
+        elif right:
+            out["title"] = right
+        elif left:
+            out["title"] = left
+    elif working:
+        out["title"] = working
+
+    return out
+
+
+def _extract_year(value: str) -> str | None:
+    match = _FILENAME_YEAR_RE.search(value)
+    return match.group(0) if match else None
 
 
 def _safe_mtime(path: Path) -> float:
