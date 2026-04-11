@@ -27,6 +27,10 @@ from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
 from franklin.installer import InstallError, install_plugin
+from franklin.license import LicenseError
+from franklin.license import login as license_login
+from franklin.license import logout as license_logout
+from franklin.license import whoami as license_whoami
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
 from franklin.planner import build_user_prompt as build_plan_prompt
@@ -50,6 +54,12 @@ app = typer.Typer(
     help="Turn technical books into Claude Code plugins.",
     no_args_is_help=True,
 )
+license_app = typer.Typer(
+    name="license",
+    help="Manage your franklin license.",
+    no_args_is_help=True,
+)
+app.add_typer(license_app, name="license")
 console = Console()
 
 
@@ -882,6 +892,67 @@ def install_command(
         "[dim]After the first time, re-running franklin install for any plugin "
         "only requires the second command — the marketplace is already added.[/dim]"
     )
+
+
+@license_app.command("login")
+def license_login_command(
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="License JWT (omit to prompt interactively)",
+    ),
+) -> None:
+    """Verify a license JWT and store it at ~/.config/franklin/license.jwt."""
+    if token is None:
+        token = typer.prompt("Paste your license token", hide_input=True)
+
+    try:
+        result = license_login(token)
+    except LicenseError as exc:
+        console.print(f"[red]✗ login failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]✓[/green] license verified for [cyan]{result.subject}[/cyan]")
+    if result.plan:
+        console.print(f"  plan:     {result.plan}")
+    if result.features:
+        console.print(f"  features: {', '.join(result.features)}")
+    console.print(f"  expires:  {result.expires_at.isoformat()}")
+
+
+@license_app.command("logout")
+def license_logout_command() -> None:
+    """Delete the stored license file."""
+    removed = license_logout()
+    if removed:
+        console.print("[green]✓[/green] license removed")
+    else:
+        console.print("[dim]no license was installed[/dim]")
+
+
+@license_app.command("whoami")
+def license_whoami_command() -> None:
+    """Show the currently installed license, if any."""
+    try:
+        result = license_whoami()
+    except LicenseError as exc:
+        console.print(f"[red]✗[/red] stored license is invalid: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if result is None:
+        console.print("[dim]no license installed — run `franklin license login`[/dim]")
+        return
+
+    console.print(f"[bold]Subject:[/bold]  {result.subject}")
+    if result.plan:
+        console.print(f"[bold]Plan:[/bold]     {result.plan}")
+    console.print(
+        f"[bold]Features:[/bold] {', '.join(result.features) if result.features else '(none)'}"
+    )
+    console.print(f"[bold]Issued:[/bold]   {result.issued_at.isoformat()}")
+    console.print(f"[bold]Expires:[/bold]  {result.expires_at.isoformat()}")
+    if result.jti:
+        console.print(f"[bold]JTI:[/bold]      {result.jti}")
 
 
 if __name__ == "__main__":

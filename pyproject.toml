@@ -17,6 +17,7 @@ dependencies = [
     "keyring>=25,<26",
     "lxml>=5,<6",
     "pydantic>=2.9,<3",
+    "pyjwt[crypto]>=2.8,<3",
     "pyyaml>=6,<7",
     "rich>=13,<14",
     "tenacity>=9,<10",
@@ -38,6 +39,12 @@ franklin = "franklin.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/franklin"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "SUPPORT.md",
+    "runs/",
+]
 
 [tool.ruff]
 target-version = "py312"
