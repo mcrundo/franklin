@@ -30,6 +30,7 @@ from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
 from franklin.planner import build_user_prompt as build_plan_prompt
 from franklin.planner import design_plan
+from franklin.publisher import PushError, push_plugin
 from franklin.reducer import DEFAULT_MODEL as REDUCER_DEFAULT_MODEL
 from franklin.reducer import generate_artifact
 from franklin.schema import (
@@ -766,6 +767,69 @@ def run_pipeline(
 
     console.rule("[bold green]pipeline complete[/bold green]")
     console.print(f"[green]✓[/green] {run.root}")
+
+
+@app.command(name="push")
+def push_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory with an assembled plugin"
+    ),
+    repo: str = typer.Option(..., "--repo", help="GitHub repository as owner/name"),
+    branch: str = typer.Option("main", "--branch", help="Target branch to push to"),
+    create_pr: bool = typer.Option(
+        False, "--pr", help="Open a pull request against main after pushing"
+    ),
+    public: bool = typer.Option(
+        False, "--public", help="Create the repo as public (default: private)"
+    ),
+) -> None:
+    """Push the assembled plugin tree to a GitHub repository."""
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(
+            f"[red]error:[/red] no assembled plugin at {plugin_root} — "
+            "run `franklin reduce` and `franklin assemble` first"
+        )
+        raise typer.Exit(code=1)
+
+    commit_message = f"franklin: assemble {plan.plugin.name} v{plan.plugin.version}"
+
+    console.rule(f"[bold]franklin push[/bold] — {plan.plugin.name}")
+    console.print(f"  plugin root: {plugin_root}")
+    console.print(f"  repo:        {repo}")
+    console.print(f"  branch:      {branch}")
+    console.print(f"  visibility:  {'public' if public else 'private'}")
+    if create_pr:
+        console.print("  --pr:        open a pull request")
+    console.print()
+
+    try:
+        result = push_plugin(
+            plugin_root,
+            repo=repo,
+            branch=branch,
+            create_pr=create_pr,
+            public=public,
+            commit_message=commit_message,
+        )
+    except PushError as exc:
+        console.print(f"[red]✗ push failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print()
+    if result.created_repo:
+        console.print(f"[green]✓[/green] created repository {result.repo_url}")
+    else:
+        console.print(f"[green]✓[/green] updated repository {result.repo_url}")
+    console.print(f"  pushed branch [cyan]{result.branch}[/cyan] via [dim]{result.backend}[/dim]")
+    if result.pr_url:
+        console.print(f"  [green]✓[/green] pull request: {result.pr_url}")
 
 
 if __name__ == "__main__":
