@@ -1,22 +1,27 @@
-"""Scan a directory for book files and cross-reference against run state.
+"""Scan directories for book files and cross-reference against run state.
 
-``franklin pick`` walks a user-provided directory (default ``~/Downloads``
-plus a couple of common Books folders), finds every ``.epub`` and ``.pdf``,
-and annotates each file with whether a run directory already exists for
-it — so the picker can show "already processed" vs "new".
+``franklin pick`` walks one or more user-provided directories, finds every
+matching book file (``.epub`` by default; ``.pdf`` opt-in via ``--pdf``),
+and annotates each with whether a run directory already exists — so the
+picker shows "already processed" vs "new".
 
-Kept pure so the CLI wrapper is a thin renderer: the discovery logic is
-testable without touching typer or Rich, and future GUIs can reuse it.
+The discovery logic is pure so the CLI wrapper is a thin renderer: all
+the filtering, dedup, and run-state cross-reference lives here and is
+testable without touching typer or Rich.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from franklin.checkpoint import RunSummary, slugify, summarize_run
 
-_BOOK_EXTENSIONS: tuple[str, ...] = (".epub", ".pdf")
+DEFAULT_FORMATS: tuple[str, ...] = (".epub",)
+ALL_FORMATS: tuple[str, ...] = (".epub", ".pdf")
+
+_BOOKS_DIR_ENV = "FRANKLIN_BOOKS_DIR"
 
 
 @dataclass(frozen=True)
@@ -41,33 +46,95 @@ class BookCandidate:
         return self.path.suffix.lower().lstrip(".")
 
 
+def default_search_dirs() -> list[Path]:
+    """Return the directories ``franklin pick`` scans when no --dir is given.
+
+    Resolution order:
+
+    1. ``FRANKLIN_BOOKS_DIR`` environment variable — colon-separated list
+       of paths, mirroring how ``$PATH`` works. Useful when the user has a
+       dedicated library folder outside the usual homedir locations.
+    2. Fallback list of common locations that exist on the user's system:
+       ``~/Books``, ``~/Downloads``, ``~/Documents``. Missing entries are
+       silently dropped so the defaults work on fresh machines.
+    """
+    env = os.environ.get(_BOOKS_DIR_ENV, "").strip()
+    if env:
+        return [Path(p).expanduser() for p in env.split(os.pathsep) if p.strip()]
+
+    candidates = [
+        Path.home() / "Books",
+        Path.home() / "Media",
+        Path.home() / "Downloads",
+        Path.home() / "Documents",
+    ]
+    return [p for p in candidates if p.exists() and p.is_dir()]
+
+
 def discover_books(
-    search_dir: Path,
+    search_dirs: list[Path],
     *,
     runs_base: Path,
     recursive: bool = True,
     max_results: int = 200,
+    formats: tuple[str, ...] = DEFAULT_FORMATS,
+    query: str | None = None,
 ) -> list[BookCandidate]:
-    """Find every .epub and .pdf under ``search_dir`` and annotate run state.
+    """Find book files under any of ``search_dirs`` and annotate run state.
 
-    Results are sorted by newest first (by mtime) and capped at
-    ``max_results`` so the picker stays snappy even over large book
-    libraries. Hidden files and dotdirs are skipped.
+    Every matching file (by extension in ``formats``, filtered by
+    ``query`` if given) is returned as a ``BookCandidate``. Results are
+    sorted newest-first by mtime, deduped across directories by resolved
+    absolute path, and capped at ``max_results``.
+
+    ``formats`` defaults to .epub only because PDFs require the Tier 4
+    cleanup pass to hit parity and tend to pollute picker listings
+    otherwise. Pass ``ALL_FORMATS`` (or the CLI's ``--pdf`` flag) to
+    include them.
+
+    ``query`` does a case-insensitive substring match on the filename
+    stem — the cheap 80/20 version of "natural search". Most users name
+    book files after the title; a richer fuzzy / metadata-based search
+    is a future enhancement.
     """
-    if not search_dir.exists() or not search_dir.is_dir():
-        return []
+    format_set = tuple(f.lower() for f in formats)
+    needle = query.lower().strip() if query else None
 
+    seen: set[Path] = set()
     files: list[Path] = []
-    iterator = search_dir.rglob("*") if recursive else search_dir.iterdir()
-    for path in iterator:
-        if not path.is_file():
+
+    for base in search_dirs:
+        if not base.exists() or not base.is_dir():
             continue
-        if any(part.startswith(".") for part in path.relative_to(search_dir).parts):
-            continue
-        if path.suffix.lower() in _BOOK_EXTENSIONS:
+
+        iterator = base.rglob("*") if recursive else base.iterdir()
+        for path in iterator:
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in format_set:
+                continue
+
+            try:
+                rel = path.relative_to(base)
+            except ValueError:
+                rel = Path(path.name)
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+
+            if needle is not None and needle not in path.stem.lower():
+                continue
+
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+
             files.append(path)
 
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    files.sort(key=_safe_mtime, reverse=True)
     files = files[:max_results]
 
     candidates: list[BookCandidate] = []
@@ -87,6 +154,13 @@ def discover_books(
             )
         )
     return candidates
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _load_existing_run(run_dir: Path) -> RunSummary | None:

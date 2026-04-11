@@ -68,7 +68,13 @@ from franklin.license import logout as license_logout
 from franklin.license import status as license_status
 from franklin.license import whoami as license_whoami
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
-from franklin.picker import BookCandidate, discover_books
+from franklin.picker import (
+    ALL_FORMATS,
+    DEFAULT_FORMATS,
+    BookCandidate,
+    default_search_dirs,
+    discover_books,
+)
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
 from franklin.planner import build_user_prompt as build_plan_prompt
 from franklin.planner import design_plan
@@ -1952,38 +1958,98 @@ def _install_local(plugin_root: Path, plugin_name: str, plugin_version: str) -> 
 
 @app.command(name="pick")
 def pick_command(
-    search_dir: Path = typer.Option(
-        Path.home() / "Downloads",
+    dirs: list[Path] = typer.Option(
+        None,
         "--dir",
         "-d",
-        help="Directory to scan for .epub and .pdf files",
+        help=(
+            "Directory to scan. Pass multiple times to scan several locations. "
+            "Defaults to FRANKLIN_BOOKS_DIR (colon-separated), or ~/Books, "
+            "~/Media, ~/Downloads, ~/Documents."
+        ),
     ),
     runs_base: Path = typer.Option(
         Path("./runs"),
         "--runs-base",
         help="Existing runs directory to cross-reference",
     ),
+    pdf: bool = typer.Option(
+        False,
+        "--pdf",
+        help="Include .pdf files in results (default is .epub only)",
+    ),
+    search: str | None = typer.Option(
+        None,
+        "--search",
+        "-s",
+        help="Case-insensitive substring filter against the filename",
+    ),
+    scan_home: bool = typer.Option(
+        False,
+        "--home",
+        help="Scan $HOME recursively when no --dir is given (slow on large homedirs)",
+    ),
     recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="Walk subdirectories"),
     limit: int = typer.Option(
         100, "--limit", help="Maximum number of candidates to display", min=1, max=500
     ),
 ) -> None:
-    """Interactive picker for .epub/.pdf files with run-state overlay.
+    """Interactive picker for book files with run-state overlay.
 
-    Scans the given directory (default ~/Downloads) for book files,
-    annotates each with whether a matching run already exists, and
-    prompts for a selection. Picking a file launches ``franklin run``
-    on it with the default options.
+    Defaults to scanning a list of common book locations for ``.epub``
+    files and cross-references each against existing run directories so
+    you can see which books you've already processed.
+
+    Directory resolution:
+
+    1. ``--dir`` options (one or more) — explicit override
+    2. ``--home`` — scan ``$HOME`` recursively
+    3. ``FRANKLIN_BOOKS_DIR`` env var (colon-separated, like ``$PATH``)
+    4. Fallback: ``~/Books``, ``~/Media``, ``~/Downloads``, ``~/Documents``
+       (those that exist)
+
+    PDFs are excluded by default because they need the Tier 4 cleanup
+    pass to match EPUB quality and tend to pollute listings. Pass
+    ``--pdf`` to include them.
+
+    ``--search <query>`` filters candidates by case-insensitive substring
+    match on the filename — the 80/20 version of fuzzy search.
     """
+    search_dirs = _resolve_pick_dirs(dirs, scan_home=scan_home)
+    if not search_dirs:
+        console.print(
+            "[red]error:[/red] no directories to scan — "
+            "pass --dir, set FRANKLIN_BOOKS_DIR, or use --home"
+        )
+        raise typer.Exit(code=1)
+
+    formats = ALL_FORMATS if pdf else DEFAULT_FORMATS
+
     candidates = discover_books(
-        search_dir, runs_base=runs_base, recursive=recursive, max_results=limit
+        search_dirs,
+        runs_base=runs_base,
+        recursive=recursive,
+        max_results=limit,
+        formats=formats,
+        query=search,
     )
     if not candidates:
-        console.print(f"[dim]no .epub or .pdf files found under {search_dir}[/dim]")
+        scope = f" ({len(search_dirs)} location(s))" if len(search_dirs) > 1 else ""
+        query_note = f" matching '{search}'" if search else ""
+        format_note = "epub/pdf" if pdf else "epub"
+        console.print(f"[dim]no {format_note} files found{query_note}{scope}[/dim]")
         return
 
     console.print()
-    console.rule(f"[bold]franklin pick[/bold] — {search_dir}")
+    rule_label = str(search_dirs[0]) if len(search_dirs) == 1 else f"{len(search_dirs)} locations"
+    console.rule(f"[bold]franklin pick[/bold] — {rule_label}")
+    if search:
+        console.print(f"  [dim]filter: {search}[/dim]")
+    if len(search_dirs) > 1:
+        for d in search_dirs:
+            console.print(f"  [dim]• {d}[/dim]")
+        console.print()
+
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", justify="right", style="dim")
     table.add_column("File", overflow="fold", style="cyan")
@@ -2020,6 +2086,7 @@ def pick_command(
         force=False,
         yes=False,
         estimate=False,
+        review=False,
         clean=False,
         push=False,
         repo=None,
@@ -2027,6 +2094,15 @@ def pick_command(
         create_pr=False,
         public=False,
     )
+
+
+def _resolve_pick_dirs(explicit: list[Path] | None, *, scan_home: bool) -> list[Path]:
+    """Pick the set of directories to scan, following the resolution order."""
+    if explicit:
+        return [d.expanduser() for d in explicit]
+    if scan_home:
+        return [Path.home()]
+    return default_search_dirs()
 
 
 def _format_size(size_bytes: int) -> str:
