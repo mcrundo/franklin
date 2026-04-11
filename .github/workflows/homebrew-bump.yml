@@ -1,0 +1,158 @@
+name: Bump Homebrew tap
+
+# Auto-bumps Formula/franklin-book.rb in mcrundo/homebrew-franklin
+# whenever a new GitHub Release is published. Waits for PyPI to settle
+# (publish.yml runs in parallel), grabs the new sdist URL + sha256,
+# patches the formula, and opens a PR on the tap repo for manual review
+# and merge.
+#
+# Manual review is intentional: if the new version added or removed
+# Python dependencies, you'll want to re-run `brew update-python-resources`
+# locally before merging the tap PR. The workflow can't do that — it
+# needs Homebrew installed and a macOS runner — so we leave it as a
+# checklist item in the tap PR description.
+#
+# Required secret: HOMEBREW_TAP_TOKEN
+#   Fine-grained PAT scoped to mcrundo/homebrew-franklin with:
+#     - Contents: Read and write
+#     - Pull requests: Read and write
+#   Configure at https://github.com/settings/tokens?type=beta and add to
+#   this repo's Actions secrets.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  bump:
+    name: Bump tap formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version from release tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF##refs/tags/}"
+          # Releases can also fire from manual `gh release create` so
+          # GITHUB_REF may not always be a tag ref. Fall back to the
+          # release event payload.
+          if [[ -z "$TAG" || "$TAG" == "$GITHUB_REF" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for PyPI to publish the sdist
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # publish.yml runs in parallel and typically finishes in
+          # under a minute. Poll for up to 10 minutes before giving up.
+          for i in $(seq 1 30); do
+            if curl -fsSL "https://pypi.org/pypi/franklin-book/${VERSION}/json" >/dev/null 2>&1; then
+              echo "PyPI has franklin-book ${VERSION}"
+              exit 0
+            fi
+            echo "PyPI doesn't have ${VERSION} yet (attempt $i/30) — sleeping 20s..."
+            sleep 20
+          done
+          echo "::error::Timeout waiting for PyPI to publish franklin-book ${VERSION}"
+          exit 1
+
+      - name: Fetch sdist URL and sha256
+        id: sdist
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          META="$(curl -fsSL "https://pypi.org/pypi/franklin-book/${VERSION}/json")"
+          URL="$(echo "$META" | jq -r '.urls[] | select(.packagetype == "sdist") | .url')"
+          SHA="$(echo "$META" | jq -r '.urls[] | select(.packagetype == "sdist") | .digests.sha256')"
+          if [[ -z "$URL" || "$URL" == "null" || -z "$SHA" || "$SHA" == "null" ]]; then
+            echo "::error::No sdist found for franklin-book ${VERSION} on PyPI"
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "  url: $URL"
+          echo "  sha: $SHA"
+
+      - name: Check out tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: mcrundo/homebrew-franklin
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Patch formula
+        id: patch
+        working-directory: tap
+        run: |
+          FORMULA=Formula/franklin-book.rb
+          if [[ ! -f "$FORMULA" ]]; then
+            echo "::error::Formula not found at $FORMULA in tap repo"
+            exit 1
+          fi
+          # Replace the url and sha256 lines. The regexes assume the
+          # formula uses double-quoted strings (the convention).
+          sed -i.bak -E "s|^(  url +)\".*\"|\\1\"${{ steps.sdist.outputs.url }}\"|" "$FORMULA"
+          sed -i.bak -E "s|^(  sha256 +)\".*\"|\\1\"${{ steps.sdist.outputs.sha }}\"|" "$FORMULA"
+          rm "$FORMULA.bak"
+
+          if git diff --quiet "$FORMULA"; then
+            echo "::warning::Formula already at this version — nothing to bump"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff "$FORMULA"
+          fi
+
+      - name: Open PR on tap repo
+        if: steps.patch.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        working-directory: tap
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="bump-franklin-book-${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # If a previous run left this branch behind, recreate it.
+          if git ls-remote --heads --exit-code origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH:$BRANCH" || true
+            git checkout "$BRANCH"
+            git reset --hard origin/main
+            # Re-apply the patch on top of fresh main
+            sed -i.bak -E "s|^(  url +)\".*\"|\\1\"${{ steps.sdist.outputs.url }}\"|" Formula/franklin-book.rb
+            sed -i.bak -E "s|^(  sha256 +)\".*\"|\\1\"${{ steps.sdist.outputs.sha }}\"|" Formula/franklin-book.rb
+            rm Formula/franklin-book.rb.bak
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+          git add Formula/franklin-book.rb
+          git commit -m "franklin-book ${VERSION}"
+          git push --force-with-lease -u origin "$BRANCH"
+
+          # Open the PR if one doesn't already exist for this branch.
+          if ! gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr create \
+              --title "franklin-book ${VERSION}" \
+              --body "$(cat <<EOF
+          Auto-generated bump for franklin-book ${VERSION}.
+
+          - **URL**: ${{ steps.sdist.outputs.url }}
+          - **sha256**: \`${{ steps.sdist.outputs.sha }}\`
+
+          Triggered by [release ${{ steps.version.outputs.tag }}](https://github.com/mcrundo/franklin/releases/tag/${{ steps.version.outputs.tag }}).
+
+          ## Verify before merging
+
+          - [ ] If franklin-book added or removed Python dependencies in this version, run \`brew update-python-resources Formula/franklin-book.rb\` locally to refresh the resource graph. The workflow can't do this — it needs Homebrew installed.
+          - [ ] \`brew install --build-from-source franklin-book\` to smoke-test.
+          - [ ] \`brew test franklin-book\`
+          - [ ] \`brew audit --strict --new-formula franklin-book\`
+          EOF
+          )"
+          else
+            echo "PR for branch $BRANCH already exists — pushed updated commit."
+          fi

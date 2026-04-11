@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# Cut a new Franklin release.
+#
+# Bumps version in pyproject.toml + __init__.py, refreshes uv.lock,
+# cuts the [Unreleased] CHANGELOG section into a dated [X.Y.Z] section,
+# runs lint/type/test as a sanity gate, commits, tags, and (after
+# confirmation) pushes both main and the new tag.
+#
+# The tag push triggers .github/workflows/release.yml which creates the
+# GitHub Release; that fires publish.yml (PyPI) and homebrew-bump.yml
+# (tap PR) automatically. See docs/releasing.md for the full flow.
+#
+# Usage:
+#   bin/release 0.3.0          # interactive — prompts before pushing
+#   bin/release 0.3.0 --yes    # non-interactive — pushes without prompting
+#   bin/release 0.3.0 --dry    # do everything except commit, tag, push
+
+set -euo pipefail
+
+# ---- args -----------------------------------------------------------------
+
+VERSION="${1:-}"
+MODE="interactive"
+
+for arg in "${@:2}"; do
+    case "$arg" in
+        --yes|-y) MODE="yes" ;;
+        --dry|-n) MODE="dry" ;;
+        *) echo "error: unknown flag '$arg'" >&2; exit 2 ;;
+    esac
+done
+
+if [[ -z "$VERSION" ]]; then
+    cat >&2 <<EOF
+usage: bin/release X.Y.Z [--yes|--dry]
+
+  X.Y.Z   semver version (e.g. 0.3.0, 1.2.4)
+  --yes   skip the push confirmation prompt
+  --dry   bump and cut, but don't commit, tag, or push
+
+See docs/releasing.md for the end-to-end release flow.
+EOF
+    exit 2
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: version must be plain X.Y.Z (got '$VERSION')" >&2
+    exit 2
+fi
+
+# ---- preflight ------------------------------------------------------------
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "error: working tree is dirty — commit or stash first" >&2
+    exit 1
+fi
+
+CURRENT_BRANCH="$(git branch --show-current)"
+if [[ "$CURRENT_BRANCH" != "main" ]]; then
+    echo "error: must be on main (currently on '$CURRENT_BRANCH')" >&2
+    exit 1
+fi
+
+git fetch --quiet origin
+LOCAL="$(git rev-parse @)"
+REMOTE="$(git rev-parse '@{u}')"
+if [[ "$LOCAL" != "$REMOTE" ]]; then
+    echo "error: main is not in sync with origin/main — pull or push first" >&2
+    exit 1
+fi
+
+CURRENT_VERSION="$(grep '^version = ' pyproject.toml | head -1 | cut -d'"' -f2)"
+if [[ "$VERSION" == "$CURRENT_VERSION" ]]; then
+    echo "error: $VERSION is already the current version in pyproject.toml" >&2
+    exit 1
+fi
+
+if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+    echo "error: tag v$VERSION already exists locally" >&2
+    exit 1
+fi
+
+if git ls-remote --tags --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+    echo "error: tag v$VERSION already exists on origin" >&2
+    exit 1
+fi
+
+# Verify [Unreleased] section has actual content (not just whitespace).
+# Strips the heading and reads up to the next "## [" line.
+UNRELEASED_BODY="$(
+    awk '
+        /^## \[Unreleased\]/ { in_section = 1; next }
+        /^## \[/ { in_section = 0 }
+        in_section { print }
+    ' CHANGELOG.md | sed -e 's/^[[:space:]]*//' -e '/^$/d' || true
+)"
+
+if [[ -z "$UNRELEASED_BODY" ]]; then
+    echo "error: CHANGELOG.md [Unreleased] section is empty — nothing to release" >&2
+    exit 1
+fi
+
+DATE="$(date +%Y-%m-%d)"
+
+echo
+echo "  current version: $CURRENT_VERSION"
+echo "  new version:     $VERSION"
+echo "  date:            $DATE"
+echo "  mode:            $MODE"
+echo
+
+# ---- bump version ---------------------------------------------------------
+
+# pyproject.toml
+sed_inplace() {
+    # GNU vs BSD sed compat: BSD wants `-i ''`, GNU wants `-i`.
+    if sed --version >/dev/null 2>&1; then
+        sed -i "$@"
+    else
+        sed -i '' "$@"
+    fi
+}
+
+sed_inplace "s/^version = \"$CURRENT_VERSION\"$/version = \"$VERSION\"/" pyproject.toml
+sed_inplace "s/^__version__ = \"$CURRENT_VERSION\"$/__version__ = \"$VERSION\"/" src/franklin/__init__.py
+
+if ! grep -q "^version = \"$VERSION\"$" pyproject.toml; then
+    echo "error: pyproject.toml bump didn't take" >&2
+    exit 1
+fi
+if ! grep -q "^__version__ = \"$VERSION\"$" src/franklin/__init__.py; then
+    echo "error: __init__.py bump didn't take" >&2
+    exit 1
+fi
+
+# uv.lock
+uv lock --quiet
+
+# ---- cut CHANGELOG --------------------------------------------------------
+
+python3 - "$VERSION" "$DATE" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+version, date = sys.argv[1], sys.argv[2]
+path = Path("CHANGELOG.md")
+text = path.read_text()
+
+if "## [Unreleased]" not in text:
+    print("error: CHANGELOG.md missing [Unreleased] heading", file=sys.stderr)
+    sys.exit(1)
+
+# Insert a new dated section header right after the existing [Unreleased]
+# heading. The existing entries naturally fall under the new dated header.
+text = text.replace(
+    "## [Unreleased]\n",
+    f"## [Unreleased]\n\n## [{version}] - {date}\n",
+    1,
+)
+
+# Update / add link references at the bottom.
+unreleased_link_re = re.compile(
+    r"\[Unreleased\]: https://github\.com/mcrundo/franklin/compare/v[0-9.]+\.\.\.HEAD"
+)
+new_unreleased = f"[Unreleased]: https://github.com/mcrundo/franklin/compare/v{version}...HEAD"
+if not unreleased_link_re.search(text):
+    print("error: CHANGELOG.md missing [Unreleased] link reference", file=sys.stderr)
+    sys.exit(1)
+text = unreleased_link_re.sub(new_unreleased, text)
+
+# Add the version-specific link right below the Unreleased link if not present.
+new_version_link = f"[{version}]: https://github.com/mcrundo/franklin/releases/tag/v{version}"
+if new_version_link not in text:
+    text = text.replace(
+        new_unreleased + "\n",
+        new_unreleased + "\n" + new_version_link + "\n",
+        1,
+    )
+
+path.write_text(text)
+PY
+
+# ---- sanity gate ----------------------------------------------------------
+
+echo "running sanity gate (ruff + mypy + pytest)..."
+uv run ruff check . >/dev/null
+uv run ruff format --check . >/dev/null
+uv run mypy >/dev/null
+uv run pytest -q >/dev/null
+
+echo "✓ sanity gate passed"
+echo
+
+# ---- commit + tag ---------------------------------------------------------
+
+if [[ "$MODE" == "dry" ]]; then
+    echo "--dry: skipping commit, tag, and push. Inspect changes with \`git diff\`."
+    exit 0
+fi
+
+git add pyproject.toml src/franklin/__init__.py uv.lock CHANGELOG.md
+git commit -m "Release $VERSION"
+git tag "v$VERSION"
+
+echo "✓ committed and tagged v$VERSION"
+echo
+
+if [[ "$MODE" == "interactive" ]]; then
+    read -r -p "Push main + v$VERSION to origin now? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        cat <<EOF
+
+Skipping push. To release later, run:
+
+    git push origin main
+    git push origin v$VERSION
+
+To undo:
+
+    git tag -d v$VERSION
+    git reset --hard HEAD~1
+EOF
+        exit 0
+    fi
+fi
+
+git push origin main
+git push origin "v$VERSION"
+
+cat <<EOF
+
+✓ Released v$VERSION.
+
+What happens next (watch with \`gh run watch\`):
+  1. release.yml creates the GitHub Release from CHANGELOG notes
+  2. publish.yml builds + uploads the sdist/wheel to PyPI
+  3. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
+EOF
