@@ -115,18 +115,29 @@ brew install franklin-book
 
 ## Bumping the formula on future releases
 
-Every new Franklin release needs a formula update:
+**This is now automated.** When `bin/release` cuts a new version and pushes the tag, `.github/workflows/homebrew-bump.yml` waits for PyPI to publish the sdist, fetches the new URL + sha256, patches `Formula/franklin-book.rb` in this tap repo, and opens a PR for review. See `docs/releasing.md` for the full release flow.
 
-1. Download new sdist URL from PyPI, update `url` and `sha256` in the formula.
-2. Re-run `brew update-python-resources Formula/franklin-book.rb` to catch new or updated transitive deps.
-3. `brew audit --strict --new-formula franklin-book` to check for drift.
-4. Commit and push to the tap repo.
+The auto-PR description includes a checklist for the manual review step:
 
-The helper script `bin/bump-homebrew` (in the main franklin repo) prints the new URL + sha256 for the latest PyPI release so you don't have to look them up manually. See its `--help`.
+1. **If dependencies changed**, run `brew update-python-resources Formula/franklin-book.rb` locally to refresh the resource graph. The workflow can't do this on its Linux runner — it needs Homebrew installed.
+2. `brew install --build-from-source franklin-book` to smoke-test.
+3. `brew test franklin-book` and `brew audit --strict --new-formula franklin-book`.
+4. Merge the PR.
 
-### Future: automate it end-to-end
+### Required secret
 
-A GitHub Action on the main franklin repo can watch for `release:published` events, clone the tap, run the bump steps, and open a PR. That's worth building once manual bumps start feeling repetitive. Not blocking for v0.1.0.
+The auto-bump workflow needs a `HOMEBREW_TAP_TOKEN` secret in the franklin repo: a fine-grained PAT scoped to `mcrundo/homebrew-franklin` with **Contents: Read and write** and **Pull requests: Read and write**. Configure at https://github.com/settings/tokens?type=beta.
+
+### Manual fallback
+
+If the workflow doesn't fire or fails for some reason, the helper script `bin/bump-homebrew` (in the main franklin repo) prints the new URL + sha256 for any PyPI release so you can patch the formula by hand:
+
+```bash
+bin/bump-homebrew              # latest PyPI release
+bin/bump-homebrew 0.3.0        # specific version
+```
+
+The output is ready to paste into the formula's `url` and `sha256` lines.
 
 ---
 
