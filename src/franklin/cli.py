@@ -27,7 +27,7 @@ from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
 from franklin.installer import InstallError, install_plugin
-from franklin.license import LicenseError
+from franklin.license import LicenseError, ensure_license
 from franklin.license import login as license_login
 from franklin.license import logout as license_logout
 from franklin.license import whoami as license_whoami
@@ -61,6 +61,34 @@ license_app = typer.Typer(
 )
 app.add_typer(license_app, name="license")
 console = Console()
+
+_PRICING_URL = "https://franklin.example.com/pricing"
+
+
+def _gate_pro_feature(feature: str, command: str) -> None:
+    """Check the license for a premium command, or exit with a friendly error.
+
+    Calls ensure_license(feature=...) and translates any LicenseError into
+    a multi-line, ANSI-rendered explanation the user can act on. Never
+    lets a stack trace reach stderr on license failure — the license
+    module's messages go into the body of the panel, nothing else.
+    """
+    try:
+        ensure_license(feature=feature)
+    except LicenseError as exc:
+        console.print()
+        console.print(f"[red]✗[/red] [bold]franklin {command}[/bold] is a Pro feature")
+        console.print()
+        console.print("  This command requires a valid franklin license.")
+        console.print(f"  [dim]Reason:[/dim] {exc}")
+        console.print()
+        console.print("  Upgrade or renew your license at:")
+        console.print(f"    [cyan]{_PRICING_URL}[/cyan]")
+        console.print()
+        console.print("  If you already have a license, run:")
+        console.print("    [cyan]franklin license login[/cyan]")
+        console.print()
+        raise typer.Exit(code=1) from exc
 
 
 def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
@@ -795,6 +823,8 @@ def push_command(
     ),
 ) -> None:
     """Push the assembled plugin tree to a GitHub repository."""
+    _gate_pro_feature("push", "push")
+
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
         console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
@@ -853,6 +883,8 @@ def install_command(
     ),
 ) -> None:
     """Install the assembled plugin tree into the local franklin marketplace."""
+    _gate_pro_feature("install", "install")
+
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
         console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
