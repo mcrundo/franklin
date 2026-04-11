@@ -16,7 +16,16 @@ from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
-from franklin.schema import BookManifest, ChapterKind, NormalizedChapter
+from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
+from franklin.planner import build_user_prompt as build_plan_prompt
+from franklin.planner import design_plan
+from franklin.schema import (
+    ArtifactType,
+    BookManifest,
+    ChapterKind,
+    NormalizedChapter,
+    PlanManifest,
+)
 from franklin.secrets import MissingApiKeyError, ensure_anthropic_api_key
 
 app = typer.Typer(
@@ -230,6 +239,138 @@ def _extract_all(
         f"[green]✓[/green] map stage complete: "
         f"{len(targets) - skipped} extracted, {skipped} skipped, "
         f"[dim]{total_in:,} input tokens / {total_out:,} output tokens[/dim]"
+    )
+
+
+@app.command(name="plan")
+def plan_pipeline(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory with sidecars"
+    ),
+    model: str = typer.Option(
+        PLANNER_DEFAULT_MODEL, "--model", help="Anthropic model ID for the planner"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Build and print the plan prompt without calling the API"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Regenerate plan.json even if it already exists"
+    ),
+) -> None:
+    """Design the plugin architecture from the distilled sidecars."""
+    run = RunDirectory(run_dir)
+    if not run.book_json.exists():
+        console.print(
+            f"[red]error:[/red] no book.json in {run_dir} — run `franklin ingest` first"
+        )
+        raise typer.Exit(code=1)
+
+    manifest = run.load_book()
+    sidecar_ids = [p.stem for p in sorted(run.chapters_dir.glob("*.json"))]
+    if not sidecar_ids:
+        console.print(
+            f"[red]error:[/red] no sidecars in {run.chapters_dir} — run `franklin map` first"
+        )
+        raise typer.Exit(code=1)
+
+    sidecars = [run.load_sidecar(cid) for cid in sidecar_ids]
+
+    if run.plan_json.exists() and not force:
+        console.print(
+            f"[yellow]plan.json already exists at {run.plan_json}[/yellow]\n"
+            "  use --force to regenerate, or open it directly to edit"
+        )
+        raise typer.Exit(code=1)
+
+    if dry_run:
+        prompt = build_plan_prompt(manifest, sidecars)
+        console.print("[bold]Dry run[/bold] — plan prompt")
+        console.print(f"  chars: {len(prompt):,}")
+        console.print(f"  approx tokens: {len(prompt) // 4:,}")
+        console.print(f"  sidecars: {len(sidecars)}")
+        console.print()
+        console.print(prompt)
+        return
+
+    try:
+        ensure_anthropic_api_key()
+    except MissingApiKeyError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[bold]Designing plugin[/bold] for [cyan]{manifest.metadata.title}[/cyan] "
+        f"from {len(sidecars)} sidecars using [dim]{model}[/dim]"
+    )
+    plan, in_toks, out_toks = design_plan(manifest, sidecars, model=model)
+    run.save_plan(plan)
+
+    _print_plan_summary(run, plan, in_toks, out_toks)
+
+
+def _print_plan_summary(
+    run: RunDirectory, plan: PlanManifest, input_tokens: int, output_tokens: int
+) -> None:
+    by_type: dict[str, list[str]] = {}
+    for artifact in plan.artifacts:
+        by_type.setdefault(artifact.type.value, []).append(artifact.path)
+
+    console.print()
+    console.print(f"[green]✓[/green] plan saved to {run.plan_json}")
+    console.print(
+        f"  [dim]{input_tokens:,} input tokens / {output_tokens:,} output tokens[/dim]"
+    )
+    console.print()
+    console.print(f"[bold]Plugin:[/bold] {plan.plugin.name} [dim]v{plan.plugin.version}[/dim]")
+    if plan.plugin.description:
+        console.print(f"  {plan.plugin.description}")
+    console.print()
+    console.print("[bold]Rationale:[/bold]")
+    for line in plan.planner_rationale.splitlines():
+        console.print(f"  {line}")
+    console.print()
+
+    counts_table = Table(title=f"Artifacts ({len(plan.artifacts)})", show_header=True)
+    counts_table.add_column("Type", style="cyan")
+    counts_table.add_column("Count", justify="right")
+    for type_name in (t.value for t in ArtifactType):
+        paths = by_type.get(type_name, [])
+        if paths:
+            counts_table.add_row(type_name, str(len(paths)))
+    console.print(counts_table)
+    console.print()
+
+    tree_table = Table(title="File tree", show_header=True)
+    tree_table.add_column("Path", style="cyan")
+    tree_table.add_column("Brief")
+    tree_table.add_column("Est. tokens", justify="right")
+    for artifact in plan.artifacts:
+        tree_table.add_row(
+            artifact.path,
+            artifact.brief[:80] + ("…" if len(artifact.brief) > 80 else ""),
+            f"{artifact.estimated_output_tokens:,}" if artifact.estimated_output_tokens else "—",
+        )
+    console.print(tree_table)
+
+    if plan.skipped_artifact_types:
+        console.print()
+        skip_table = Table(title="Skipped", show_header=True, header_style="dim")
+        skip_table.add_column("Type", style="dim")
+        skip_table.add_column("Reason", style="dim")
+        for skip in plan.skipped_artifact_types:
+            skip_table.add_row(skip.type, skip.reason)
+        console.print(skip_table)
+
+    if plan.coherence_rules:
+        console.print()
+        console.print("[bold]Coherence rules:[/bold]")
+        for rule in plan.coherence_rules:
+            console.print(f"  • {rule}")
+
+    console.print()
+    console.print(
+        f"Review the plan at [cyan]{run.plan_json}[/cyan] and edit as needed.\n"
+        "Next: [bold]franklin reduce[/bold] (coming soon) to generate each artifact."
     )
 
 
