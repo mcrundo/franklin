@@ -140,6 +140,57 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
     return RunDirectory(Path.cwd() / "runs" / slug)
 
 
+def _print_next_steps(
+    *,
+    run_dir: Path,
+    pushed: bool,
+    pushed_repo: str | None,
+) -> None:
+    """Render a tailored 'what to do next' block after assemble completes.
+
+    The path a user takes depends on whether they already pushed:
+
+    - Not pushed → guide them through local install first, then publish.
+    - Pushed → show the GitHub URL and the install command end-users
+      would run against the published plugin.
+
+    Always surfaces the iteration loop (grade → reduce --force) and the
+    review command, since those are the levers for "I don't like the
+    output" that new users reach for but might not know about.
+    """
+    console.print()
+    console.rule("[bold]Next steps[/bold]")
+
+    if pushed and pushed_repo:
+        console.print(
+            f"  [green]✓[/green] published to [cyan]https://github.com/{pushed_repo}[/cyan]"
+        )
+        console.print()
+        console.print("  [bold]Install from your published repo:[/bold]")
+        console.print(f"    [cyan]claude plugin install {pushed_repo}[/cyan]")
+        console.print()
+    else:
+        console.print("  [bold]1.[/bold] Try it locally before publishing:")
+        console.print(f"     [cyan]franklin install {run_dir} --scope local[/cyan]")
+        console.print("     [dim](--scope user persists it; --scope local is per-session)[/dim]")
+        console.print()
+        console.print("  [bold]2.[/bold] When you're happy, publish to GitHub:")
+        console.print(f"     [cyan]franklin push {run_dir} --repo owner/name[/cyan]")
+        console.print(
+            "     [dim](add --pr to open a pull request, --public to make the repo public)[/dim]"
+        )
+        console.print()
+
+    console.print("  [bold]Iterate on the output:[/bold]")
+    console.print(f"     [cyan]franklin grade {run_dir}[/cyan]  — detailed grade card")
+    console.print(f"     [cyan]franklin review {run_dir}[/cyan]  — prune artifacts you don't want")
+    console.print(
+        f"     [cyan]franklin reduce {run_dir} --artifact <id> --force[/cyan]  "
+        "— regenerate a single file"
+    )
+    console.print()
+
+
 def _print_friendly_error(friendly: FriendlyError, *, stage: str | None = None) -> None:
     """Render a FriendlyError as a Rich block with title/detail/suggestion."""
     prefix = f"{stage} stage — " if stage else ""
@@ -1031,6 +1082,8 @@ def assemble_pipeline(
             f"({size_kb:,.1f} KB) at {archive_path}"
         )
 
+    _print_next_steps(run_dir=run_dir, pushed=False, pushed_repo=None)
+
 
 def _print_grade_card(grade: RunGrade, *, plan_name: str) -> None:
     """Render the run grade card to the console."""
@@ -1168,9 +1221,7 @@ def review_command(
     """
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
-        console.print(
-            f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first"
-        )
+        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
         raise typer.Exit(code=1)
 
     plan = run.load_plan()
@@ -1206,8 +1257,7 @@ def review_command(
         console.print(f"  [red]-[/red] {artifact.path}  [dim]({artifact.id})[/dim]")
     console.print()
     console.print(
-        f"[bold]Keeping {result.kept_count} artifact(s)[/bold] "
-        f"(was {len(plan.artifacts)})"
+        f"[bold]Keeping {result.kept_count} artifact(s)[/bold] (was {len(plan.artifacts)})"
     )
 
     if not typer.confirm("Save the reduced plan?", default=True):
@@ -1656,6 +1706,7 @@ def run_pipeline(
 
     console.rule("[bold green]pipeline complete[/bold green]")
     console.print(f"[green]✓[/green] {run.root}")
+    _print_next_steps(run_dir=run.root, pushed=push, pushed_repo=repo)
 
 
 def _validate_push_flags(
