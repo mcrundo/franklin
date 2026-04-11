@@ -6,11 +6,24 @@ Franklin reads an EPUB or PDF and produces a full Claude Code plugin — SKILL, 
 
 ## Install
 
+Once published to PyPI, the easiest install is via [`uv`](https://docs.astral.sh/uv/) or `pipx`:
+
 ```bash
-uv sync
+uv tool install franklin-book
+# or
+pipx install franklin-book
 ```
 
-Franklin is a Python 3.12+ package managed with `uv`. All commands below assume `uv run franklin …`; drop the `uv run` prefix if you install the package globally.
+Both drop a `franklin` command onto your PATH. (The distribution is called `franklin-book` on PyPI because `franklin` was already taken; the CLI you actually type is still `franklin`.)
+
+For development from a clone:
+
+```bash
+uv sync
+uv run franklin doctor
+```
+
+Franklin is a Python 3.12+ package managed with `uv`.
 
 ## First-run checklist
 

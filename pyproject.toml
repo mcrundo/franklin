@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "franklin"
+name = "franklin-book"
 version = "0.1.0"
 description = "Turn technical books into Claude Code plugins using an Opus-advises, Sonnet-executes pipeline"
 readme = "README.md"
