@@ -421,7 +421,7 @@ wheels = [
 ]
 
 [[package]]
-name = "franklin"
+name = "franklin-book"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
