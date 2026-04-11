@@ -73,6 +73,7 @@ from franklin.planner import design_plan
 from franklin.publisher import PushError, push_plugin
 from franklin.reducer import DEFAULT_MODEL as REDUCER_DEFAULT_MODEL
 from franklin.reducer import generate_artifact
+from franklin.review import apply_omissions, parse_omit_selection
 from franklin.schema import (
     Artifact,
     ArtifactType,
@@ -1152,6 +1153,92 @@ def _print_frontmatter_issues(plugin_root: Path, issues: list[FrontmatterIssue])
     console.print(table)
 
 
+@app.command(name="review")
+def review_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory containing plan.json"
+    ),
+) -> None:
+    """Review the planned artifacts and omit any you don't want to generate.
+
+    Reads plan.json, prints a numbered table of proposed artifacts, and
+    prompts for comma-separated indices to omit. The reduced plan is
+    saved back to plan.json in place; nothing else on disk is touched.
+    Re-runnable — each review pass starts from the current plan state.
+    """
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(
+            f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first"
+        )
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    if not plan.artifacts:
+        console.print("[dim]plan has no artifacts to review[/dim]")
+        return
+
+    _print_review_table(plan.artifacts)
+
+    while True:
+        raw = typer.prompt(
+            "Indices to omit (e.g. 1,3 or 2-4), blank to keep all",
+            default="",
+            show_default=False,
+        )
+        try:
+            indices = parse_omit_selection(raw, total=len(plan.artifacts))
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            continue
+        break
+
+    if not indices:
+        console.print("[green]✓[/green] keeping all artifacts; plan unchanged")
+        return
+
+    omit_ids = [plan.artifacts[i - 1].id for i in indices]
+    result = apply_omissions(plan, omit_ids)
+
+    console.print()
+    console.print("[bold]About to omit:[/bold]")
+    for artifact in result.omitted:
+        console.print(f"  [red]-[/red] {artifact.path}  [dim]({artifact.id})[/dim]")
+    console.print()
+    console.print(
+        f"[bold]Keeping {result.kept_count} artifact(s)[/bold] "
+        f"(was {len(plan.artifacts)})"
+    )
+
+    if not typer.confirm("Save the reduced plan?", default=True):
+        console.print("[dim]no changes written[/dim]")
+        return
+
+    run.save_plan(result.plan)
+    console.print(f"[green]✓[/green] plan.json updated: {run.plan_json}")
+
+
+def _print_review_table(artifacts: list[Artifact]) -> None:
+    console.print()
+    console.rule("[bold]Review proposed artifacts[/bold]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Type", style="dim")
+    table.add_column("Path", style="cyan", overflow="fold")
+    table.add_column("Brief", overflow="fold")
+    table.add_column("Feeds from", style="dim", overflow="fold")
+    for idx, a in enumerate(artifacts, start=1):
+        table.add_row(
+            str(idx),
+            a.type.value,
+            a.path,
+            a.brief,
+            ", ".join(a.feeds_from) if a.feeds_from else "[dim](none)[/dim]",
+        )
+    console.print(table)
+    console.print()
+
+
 @app.command(name="grade")
 def grade_command(
     run_dir: Path = typer.Argument(
@@ -1432,6 +1519,11 @@ def run_pipeline(
         "--estimate",
         help="Predict token counts and cost without running the paid stages",
     ),
+    review: bool = typer.Option(
+        False,
+        "--review",
+        help="Pause between plan and reduce to review and omit artifacts",
+    ),
     clean: bool = typer.Option(
         False,
         "--clean",
@@ -1518,6 +1610,11 @@ def run_pipeline(
         ),
         ("assemble", lambda: assemble_pipeline(run_dir=run.root, zip_archive=False)),
     ]
+    if review:
+        stages.insert(
+            3,  # after plan, before reduce
+            ("review", lambda: review_command(run_dir=run.root)),
+        )
     if push:
         # `repo` is guaranteed non-None here by _validate_push_flags.
         assert repo is not None
