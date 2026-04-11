@@ -32,6 +32,7 @@ from franklin.checkpoint import (
     summarize_run,
 )
 from franklin.classify import classify_chapters
+from franklin.doctor import CheckStatus, has_failures, run_checks
 from franklin.grading import RunGrade, grade_run, write_metrics
 from franklin.ingest import UnsupportedFormatError, ingest_book
 from franklin.inspector import (
@@ -1595,6 +1596,51 @@ def _install_local(plugin_root: Path, plugin_name: str, plugin_version: str) -> 
         "is only active for the lifetime of that `claude` process. For a persistent "
         "install, re-run with --scope user or --scope project.[/dim]"
     )
+
+
+@app.command(name="doctor")
+def doctor_command(
+    skip_network: bool = typer.Option(
+        False,
+        "--skip-network",
+        help="Skip the Anthropic reachability probe",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit the check results as JSON"),
+) -> None:
+    """Run a preflight health check and report pass/warn/fail per item."""
+    results = run_checks(skip_network=skip_network)
+
+    if output_json:
+        import json as _json
+
+        payload = [{"name": r.name, "status": r.status.value, "detail": r.detail} for r in results]
+        console.print_json(_json.dumps(payload))
+        raise typer.Exit(code=1 if has_failures(results) else 0)
+
+    console.print()
+    console.rule("[bold]franklin doctor[/bold]")
+    for r in results:
+        icon, color = _doctor_presentation(r.status)
+        console.print(f"  {icon} [bold]{r.name:<28}[/bold] [{color}]{r.detail}[/{color}]")
+    console.print()
+
+    fail_count = sum(1 for r in results if r.status == CheckStatus.FAIL)
+    warn_count = sum(1 for r in results if r.status == CheckStatus.WARN)
+    if fail_count:
+        console.print(f"[red]✗ {fail_count} failing check(s), {warn_count} warning(s)[/red]")
+        raise typer.Exit(code=1)
+    if warn_count:
+        console.print(f"[yellow]⚠ {warn_count} warning(s); no hard failures[/yellow]")
+        return
+    console.print("[green]✓ all checks passed[/green]")
+
+
+def _doctor_presentation(status: CheckStatus) -> tuple[str, str]:
+    return {
+        CheckStatus.OK: ("[green]✓[/green]", "dim"),
+        CheckStatus.WARN: ("[yellow]⚠[/yellow]", "yellow"),
+        CheckStatus.FAIL: ("[red]✗[/red]", "red"),
+    }[status]
 
 
 @runs_app.command("list")
