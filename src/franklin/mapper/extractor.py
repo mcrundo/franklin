@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from franklin.llm import call_tool, make_client, render_prompt
+from franklin.llm import call_tool, make_client, render_prompt, validate_with_extra_recovery
 from franklin.llm.client import DEFAULT_MAX_TOKENS
 from franklin.schema import (
     BookManifest,
@@ -77,7 +77,11 @@ def extract_chapter(
     )
 
     try:
-        extraction = ChapterExtraction.model_validate(result.input)
+        extraction = validate_with_extra_recovery(
+            ChapterExtraction,
+            result.input,
+            label=f"mapper:{chapter.chapter_id}",
+        )
     except ValidationError as exc:
         raise RuntimeError(
             f"extractor returned invalid payload for {chapter.chapter_id}: {exc}"

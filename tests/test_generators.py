@@ -282,6 +282,40 @@ def test_generate_artifact_rejects_empty_content() -> None:
         )
 
 
+def test_generate_artifact_warns_on_unresolved_feeds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the planner references a chapter the mapper didn't produce
+    (planner hallucination, partial run, or post-Gate-1 deselection),
+    the resolver collects the missing path into ``unresolved`` instead of
+    raising. The generator must surface that so users see the silent
+    context loss instead of shipping a degraded file unnoticed."""
+    book = _book()
+    sidecars = {"ch04": _sidecar("ch04")}
+    plan = _plan([_reference_artifact()])
+    # Reference an artifact that feeds from a chapter that doesn't exist.
+    artifact = Artifact(
+        id="art.ref.missing",
+        type=ArtifactType.REFERENCE,
+        path="references/missing.md",
+        brief="Brief about missing content.",
+        feeds_from=["ch04.concepts", "ch99.concepts"],  # ch99 doesn't exist
+    )
+    client = _FakeClient("# Generated body")
+
+    with caplog.at_level("WARNING", logger="franklin.reducer.generators"):
+        generate_artifact(
+            artifact,
+            plan=plan,
+            book=book,
+            sidecars=sidecars,
+            client=client,
+        )
+
+    assert any("ch99.concepts" in r.message for r in caplog.records)
+    assert any("references/missing.md" in r.message for r in caplog.records)
+
+
 def test_generate_artifact_uses_system_cache() -> None:
     book = _book()
     sidecars = {"ch04": _sidecar("ch04")}

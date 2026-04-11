@@ -10,6 +10,7 @@ the extra context each type needs injected.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,8 @@ from franklin.schema import (
     ChapterSidecar,
     PlanManifest,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 CACHE_BREAKPOINT = "<!-- CACHE-BREAKPOINT -->"
@@ -96,6 +99,19 @@ def generate_artifact(
     llm = client if client is not None else make_client()
 
     context = resolve_feeds(artifact.feeds_from, book=book, sidecars=sidecars)
+    if context.unresolved:
+        # Surfaces planner hallucinations and post-Gate-1 chapter
+        # deselections that the planner couldn't see. The artifact will
+        # still generate from whatever resolved feeds it has, but the
+        # caller now sees that some context was missing instead of
+        # silently shipping a degraded file.
+        logger.warning(
+            "reducer:%s: %d unresolved feed path(s) — generated content "
+            "may be missing context: %s",
+            artifact.path,
+            len(context.unresolved),
+            ", ".join(context.unresolved),
+        )
 
     template_name = _template_name_for(artifact.type)
     template_vars = _build_template_vars(artifact=artifact, plan=plan, context=context)
