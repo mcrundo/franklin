@@ -7,6 +7,7 @@ from pathlib import Path
 
 from franklin.assembler import (
     find_template_leaks,
+    validate_frontmatter,
     validate_links,
     write_plugin_manifest,
 )
@@ -205,3 +206,100 @@ def test_find_template_leaks_ignores_single_braces(tmp_path: Path) -> None:
         "# Service Objects\n\n```ruby\ndef call(**opts); { ok: true }; end\n```\n"
     )
     assert find_template_leaks(root) == []
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter validator tests
+# ---------------------------------------------------------------------------
+
+
+_VALID_SKILL = """\
+---
+name: p
+description: A test plugin
+allowed-tools:
+  - Read
+  - Grep
+---
+
+# Plugin Body
+"""
+
+_VALID_COMMAND = """\
+---
+description: A test command
+argument-hint: "[target]"
+---
+
+# Command Body
+"""
+
+_VALID_AGENT = """\
+---
+name: p-reviewer
+description: Review code against the plugin's rules
+model: inherit
+---
+
+# Agent Body
+"""
+
+
+def _write_valid_plugin(tmp_path: Path) -> Path:
+    root = _mkplugin(tmp_path)
+    (root / "skills/p/SKILL.md").write_text(_VALID_SKILL)
+    (root / "commands/spec-test.md").write_text(_VALID_COMMAND)
+    (root / "agents/reviewer.md").write_text(_VALID_AGENT)
+    return root
+
+
+def test_validate_frontmatter_clean_tree_has_no_issues(tmp_path: Path) -> None:
+    root = _write_valid_plugin(tmp_path)
+    assert validate_frontmatter(root) == []
+
+
+def test_validate_frontmatter_flags_missing_block(tmp_path: Path) -> None:
+    root = _write_valid_plugin(tmp_path)
+    (root / "commands/spec-test.md").write_text("# Command without frontmatter\n")
+    issues = validate_frontmatter(root)
+    assert len(issues) == 1
+    assert issues[0].kind == "missing"
+    assert issues[0].category == "command"
+
+
+def test_validate_frontmatter_flags_malformed_yaml(tmp_path: Path) -> None:
+    root = _write_valid_plugin(tmp_path)
+    (root / "agents/reviewer.md").write_text(
+        "---\nname: [unterminated list\n---\n\n# Body\n"
+    )
+    issues = validate_frontmatter(root)
+    assert len(issues) == 1
+    assert issues[0].kind == "unparseable"
+
+
+def test_validate_frontmatter_flags_missing_required_field(tmp_path: Path) -> None:
+    root = _write_valid_plugin(tmp_path)
+    (root / "skills/p/SKILL.md").write_text(
+        "---\ndescription: No name here\n---\n\n# Body\n"
+    )
+    issues = validate_frontmatter(root)
+    assert len(issues) == 1
+    assert issues[0].kind == "field-missing"
+    assert "name" in issues[0].message
+
+
+def test_validate_frontmatter_flags_empty_description(tmp_path: Path) -> None:
+    root = _write_valid_plugin(tmp_path)
+    (root / "commands/spec-test.md").write_text(
+        "---\ndescription: \n---\n\n# Body\n"
+    )
+    issues = validate_frontmatter(root)
+    assert len(issues) == 1
+    assert issues[0].kind == "field-wrong-type"
+
+
+def test_validate_frontmatter_ignores_reference_files(tmp_path: Path) -> None:
+    """Reference files under references/ are plain markdown — no frontmatter required."""
+    root = _write_valid_plugin(tmp_path)
+    # Reference files already exist from _mkplugin; confirm they're not flagged
+    assert validate_frontmatter(root) == []

@@ -14,8 +14,10 @@ from rich.table import Table
 
 from franklin.assembler import (
     BrokenLink,
+    FrontmatterIssue,
     TemplateLeak,
     find_template_leaks,
+    validate_frontmatter,
     validate_links,
     write_plugin_manifest,
 )
@@ -602,6 +604,7 @@ def assemble_pipeline(
 
     broken_links = validate_links(plugin_root)
     template_leaks = find_template_leaks(plugin_root)
+    frontmatter_issues = validate_frontmatter(plugin_root)
 
     if broken_links:
         _print_broken_links(plugin_root, broken_links)
@@ -613,8 +616,13 @@ def assemble_pipeline(
     else:
         console.print("[green]✓[/green] no unfilled template placeholders")
 
+    if frontmatter_issues:
+        _print_frontmatter_issues(plugin_root, frontmatter_issues)
+    else:
+        console.print("[green]✓[/green] all frontmatter blocks are valid")
+
     console.print()
-    issue_count = len(broken_links) + len(template_leaks)
+    issue_count = len(broken_links) + len(template_leaks) + len(frontmatter_issues)
     if issue_count:
         console.print(
             f"[yellow]⚠ assemble finished with {issue_count} issue(s)[/yellow]"
@@ -670,6 +678,22 @@ def _print_template_leaks(plugin_root: Path, leaks: list[TemplateLeak]) -> None:
         table.add_row(
             source, str(leak.line_number), leak.placeholder, leak.context
         )
+    console.print(table)
+
+
+def _print_frontmatter_issues(
+    plugin_root: Path, issues: list[FrontmatterIssue]
+) -> None:
+    console.print()
+    console.print(f"[red]✗[/red] {len(issues)} frontmatter issue(s):")
+    table = Table(show_header=True, header_style="bold red")
+    table.add_column("Source file", style="cyan", overflow="fold")
+    table.add_column("Category")
+    table.add_column("Kind")
+    table.add_column("Message", overflow="fold")
+    for issue in issues:
+        source = str(issue.source_file.relative_to(plugin_root))
+        table.add_row(source, issue.category, issue.kind, issue.message)
     console.print(table)
 
 
