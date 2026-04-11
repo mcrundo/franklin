@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 from franklin.assembler import (
     find_template_leaks,
+    package_plugin,
     validate_frontmatter,
     validate_links,
     write_plugin_manifest,
@@ -303,3 +305,54 @@ def test_validate_frontmatter_ignores_reference_files(tmp_path: Path) -> None:
     root = _write_valid_plugin(tmp_path)
     # Reference files already exist from _mkplugin; confirm they're not flagged
     assert validate_frontmatter(root) == []
+
+
+# ---------------------------------------------------------------------------
+# Packager tests
+# ---------------------------------------------------------------------------
+
+
+def test_package_plugin_writes_a_zip_with_plugin_prefixed_entries(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "my-plugin"
+    (plugin_root / "skills/my-plugin/references").mkdir(parents=True)
+    (plugin_root / "commands").mkdir(parents=True)
+    (plugin_root / "skills/my-plugin/SKILL.md").write_text("# Skill")
+    (plugin_root / "skills/my-plugin/references/foo.md").write_text("# Foo")
+    (plugin_root / "commands/do-thing.md").write_text("# Do Thing")
+
+    archive = tmp_path / "my-plugin.zip"
+    result = package_plugin(plugin_root, archive)
+
+    assert result == archive
+    assert archive.exists()
+    with zipfile.ZipFile(archive) as zf:
+        names = sorted(zf.namelist())
+    assert names == [
+        "my-plugin/commands/do-thing.md",
+        "my-plugin/skills/my-plugin/SKILL.md",
+        "my-plugin/skills/my-plugin/references/foo.md",
+    ]
+
+
+def test_package_plugin_creates_output_parent_dir(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "p"
+    plugin_root.mkdir()
+    (plugin_root / "a.md").write_text("x")
+
+    archive = tmp_path / "sub/nested/p.zip"
+    package_plugin(plugin_root, archive)
+    assert archive.exists()
+
+
+def test_package_plugin_contents_match_source_files(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "p"
+    plugin_root.mkdir()
+    (plugin_root / "a.md").write_text("alpha\n")
+    (plugin_root / "b.md").write_text("beta\n")
+
+    archive = tmp_path / "p.zip"
+    package_plugin(plugin_root, archive)
+
+    with zipfile.ZipFile(archive) as zf:
+        assert zf.read("p/a.md").decode() == "alpha\n"
+        assert zf.read("p/b.md").decode() == "beta\n"

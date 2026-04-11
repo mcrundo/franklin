@@ -17,6 +17,7 @@ from franklin.assembler import (
     FrontmatterIssue,
     TemplateLeak,
     find_template_leaks,
+    package_plugin,
     validate_frontmatter,
     validate_links,
     write_plugin_manifest,
@@ -569,6 +570,11 @@ def assemble_pipeline(
     run_dir: Path = typer.Argument(
         ..., exists=True, file_okay=False, help="Run directory with a generated plugin"
     ),
+    zip_archive: bool = typer.Option(
+        False,
+        "--zip",
+        help="Also produce a distributable .zip archive of the plugin tree",
+    ),
 ) -> None:
     """Assemble the generated plugin tree: write plugin.json and report."""
     run = RunDirectory(run_dir)
@@ -629,6 +635,15 @@ def assemble_pipeline(
         )
     else:
         console.print(f"[green]✓[/green] assemble complete: {plugin_root}")
+
+    if zip_archive:
+        archive_path = run.output_dir / f"{plan.plugin.name}.zip"
+        package_plugin(plugin_root, archive_path)
+        size_kb = archive_path.stat().st_size / 1024
+        console.print(
+            f"[green]✓[/green] packaged [cyan]{archive_path.name}[/cyan] "
+            f"({size_kb:,.1f} KB) at {archive_path}"
+        )
 
 
 def _print_broken_links(plugin_root: Path, broken: list[BrokenLink]) -> None:
