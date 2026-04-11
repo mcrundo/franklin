@@ -26,6 +26,13 @@ from franklin.assembler import (
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import UnsupportedFormatError, ingest_book
+from franklin.inspector import (
+    ChapterInspection,
+    InspectError,
+    InspectReport,
+    inspect_run,
+    report_to_json,
+)
 from franklin.installer import InstallError, install_plugin
 from franklin.license import LicenseError, ensure_license
 from franklin.license import login as license_login
@@ -761,9 +768,156 @@ def _print_frontmatter_issues(plugin_root: Path, issues: list[FrontmatterIssue])
     console.print(table)
 
 
+@app.command(name="inspect")
+def inspect_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory to inspect"
+    ),
+    chapter: str | None = typer.Option(
+        None,
+        "--chapter",
+        "-c",
+        help="Print full prose and code blocks for one chapter (by chapter_id, e.g. ch05)",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON instead of the rich terminal report",
+    ),
+) -> None:
+    """Preview a run's ingest output before committing to the paid stages."""
+    try:
+        report = inspect_run(run_dir)
+    except InspectError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        print(report_to_json(report))
+        return
+
+    if chapter is not None:
+        _render_single_chapter(report, chapter)
+        return
+
+    _render_inspect_summary(report)
+
+
+def _render_inspect_summary(report: InspectReport) -> None:
+    book = report.book
+    console.rule(f"[bold]franklin inspect[/bold] — {book.metadata.title}")
+    authors = ", ".join(book.metadata.authors) if book.metadata.authors else "—"
+    console.print(f"  Authors:  {authors}")
+    console.print(f"  Format:   {book.source.format}")
+    console.print(f"  Chapters: {report.total_chapters} ({report.content_chapters} content)")
+    console.print(
+        f"  Words:    {report.total_words:,} total, "
+        f"avg {report.avg_content_words:,} per content chapter"
+    )
+    console.print()
+
+    for inspection in report.chapters:
+        _render_chapter_block(inspection)
+
+    if report.anomalies:
+        console.rule("[bold yellow]Anomalies[/bold yellow]")
+        for anomaly in report.anomalies:
+            console.print(
+                f"  [yellow]⚠[/yellow] [cyan]{anomaly.chapter_id}[/cyan] "
+                f"[dim]{anomaly.kind}:[/dim] {anomaly.message}"
+            )
+        console.print()
+    else:
+        console.rule("[bold green]No anomalies detected[/bold green]")
+        console.print()
+
+
+def _render_chapter_block(inspection: ChapterInspection) -> None:
+    chapter = inspection.chapter
+    toc = inspection.toc_entry
+    mark = " [yellow]⚠[/yellow]" if inspection.anomalies else ""
+    header = (
+        f"── [cyan]{chapter.chapter_id}[/cyan] · {toc.kind.value} · "
+        f"{chapter.word_count:,} words · "
+        f"{len(chapter.code_blocks)} code blocks ──{mark}"
+    )
+    console.print(header)
+    console.print(f"  Title: {chapter.title}")
+
+    prose_sample = chapter.text[:400].rstrip()
+    if prose_sample:
+        console.print()
+        console.print("  [dim]Prose sample:[/dim]")
+        for line in prose_sample.splitlines():
+            console.print(f"    {line}")
+        if len(chapter.text) > 400:
+            console.print("    [dim]...[/dim]")
+
+    longest = inspection.longest_code_block
+    if longest:
+        console.print()
+        console.print(f"  [dim]Longest code block ({len(longest):,} chars):[/dim]")
+        sample = longest[:300]
+        for line in sample.splitlines():
+            console.print(f"    {line}")
+        if len(longest) > 300:
+            console.print("    [dim]...[/dim]")
+
+    for anomaly in inspection.anomalies:
+        console.print(f"  [yellow]⚠ {anomaly.kind}:[/yellow] {anomaly.message}")
+    console.print()
+
+
+def _render_single_chapter(report: InspectReport, chapter_id: str) -> None:
+    target: ChapterInspection | None = None
+    for inspection in report.chapters:
+        if inspection.chapter.chapter_id == chapter_id:
+            target = inspection
+            break
+
+    if target is None:
+        available = ", ".join(c.chapter.chapter_id for c in report.chapters)
+        console.print(
+            f"[red]error:[/red] chapter {chapter_id!r} not found (available: {available})"
+        )
+        raise typer.Exit(code=1)
+
+    chapter = target.chapter
+    toc = target.toc_entry
+    console.rule(f"[bold]{chapter.chapter_id}[/bold] — {chapter.title}")
+    console.print(f"  Kind:        {toc.kind.value}")
+    console.print(f"  Confidence:  {toc.kind_confidence:.2f} ({toc.kind_reason})")
+    console.print(f"  Source:      {chapter.source_ref}")
+    console.print(f"  Words:       {chapter.word_count:,}")
+    console.print(f"  Code blocks: {len(chapter.code_blocks)}")
+    console.print()
+
+    console.rule("[bold]Full text[/bold]")
+    console.print(chapter.text)
+    console.print()
+
+    if chapter.code_blocks:
+        console.rule(f"[bold]Code blocks ({len(chapter.code_blocks)})[/bold]")
+        for i, code_block in enumerate(chapter.code_blocks, start=1):
+            console.print(
+                f"[dim]── code-block-{i}"
+                + (f" ({code_block.language})" if code_block.language else "")
+                + " ──[/dim]"
+            )
+            console.print(code_block.code)
+            console.print()
+
+    if target.anomalies:
+        console.rule("[bold yellow]Anomalies[/bold yellow]")
+        for anomaly in target.anomalies:
+            console.print(f"  [yellow]⚠ {anomaly.kind}:[/yellow] {anomaly.message}")
+
+
 @app.command(name="run")
 def run_pipeline(
-    book_path: Path = typer.Argument(..., exists=True, readable=True, help="Path to .epub"),
+    book_path: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Path to .epub or .pdf"
+    ),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Run directory (default: ./runs/<slug>)"
     ),
