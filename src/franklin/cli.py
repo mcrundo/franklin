@@ -737,8 +737,25 @@ def run_pipeline(
         None, "--output", "-o", help="Run directory (default: ./runs/<slug>)"
     ),
     force: bool = typer.Option(False, "--force", help="Re-run stages whose outputs already exist"),
+    push: bool = typer.Option(
+        False, "--push", help="After assemble, push the plugin to GitHub (requires --repo)"
+    ),
+    repo: str | None = typer.Option(
+        None, "--repo", help="GitHub repository as owner/name (required with --push)"
+    ),
+    branch: str = typer.Option(
+        "main", "--branch", help="Target branch to push to (only with --push)"
+    ),
+    create_pr: bool = typer.Option(
+        False, "--pr", help="Open a PR against main after pushing (only with --push)"
+    ),
+    public: bool = typer.Option(
+        False, "--public", help="Create the repo as public (only with --push)"
+    ),
 ) -> None:
     """Run the full pipeline end-to-end: ingest → map → plan → reduce → assemble."""
+    _validate_push_flags(push=push, repo=repo, branch=branch, create_pr=create_pr, public=public)
+
     run = _resolve_run_dir(book_path, output)
     run.ensure()
 
@@ -746,6 +763,8 @@ def run_pipeline(
     console.print(f"  run directory: {run.root}")
     if force:
         console.print("  [yellow]--force[/yellow]: re-running existing stages")
+    if push:
+        console.print(f"  [yellow]--push[/yellow]: publish to {repo} on branch {branch}")
     console.print()
 
     stages: list[tuple[str, Callable[[], None]]] = [
@@ -781,6 +800,21 @@ def run_pipeline(
         ),
         ("assemble", lambda: assemble_pipeline(run_dir=run.root, zip_archive=False)),
     ]
+    if push:
+        # `repo` is guaranteed non-None here by _validate_push_flags.
+        assert repo is not None
+        stages.append(
+            (
+                "push",
+                lambda: push_command(
+                    run_dir=run.root,
+                    repo=repo,
+                    branch=branch,
+                    create_pr=create_pr,
+                    public=public,
+                ),
+            )
+        )
 
     for name, fn in stages:
         # `plan` is the only stage whose standalone command refuses to run
@@ -806,6 +840,35 @@ def run_pipeline(
 
     console.rule("[bold green]pipeline complete[/bold green]")
     console.print(f"[green]✓[/green] {run.root}")
+
+
+def _validate_push_flags(
+    *, push: bool, repo: str | None, branch: str, create_pr: bool, public: bool
+) -> None:
+    """Reject invalid --push flag combinations before any work happens.
+
+    `--repo` is required with `--push`, and the push-only modifiers
+    (`--branch` when non-default, `--pr`, `--public`) are rejected on
+    their own. The goal is to fail the command before spending any
+    tokens or touching disk if the user's invocation doesn't make sense.
+    """
+    if push and not repo:
+        console.print("[red]error:[/red] --push requires --repo owner/name")
+        raise typer.Exit(code=2)
+
+    if not push:
+        stray: list[str] = []
+        if repo is not None:
+            stray.append("--repo")
+        if branch != "main":
+            stray.append("--branch")
+        if create_pr:
+            stray.append("--pr")
+        if public:
+            stray.append("--public")
+        if stray:
+            console.print(f"[red]error:[/red] {', '.join(stray)} can only be used with --push")
+            raise typer.Exit(code=2)
 
 
 @app.command(name="push")
