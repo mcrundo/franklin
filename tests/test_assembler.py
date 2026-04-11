@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from franklin.assembler import validate_links, write_plugin_manifest
+from franklin.assembler import (
+    find_template_leaks,
+    validate_links,
+    write_plugin_manifest,
+)
 from franklin.schema import PluginMeta
 
 
@@ -141,3 +145,63 @@ def test_validate_links_reports_line_numbers(tmp_path: Path) -> None:
     assert len(broken) == 1
     assert broken[0].line_number == 5
     assert broken[0].target_path == "missing.md"
+    assert broken[0].kind == "missing"
+
+
+def test_validate_links_flags_angle_bracket_placeholders_as_placeholder_kind(
+    tmp_path: Path,
+) -> None:
+    root = _mkplugin(tmp_path)
+    (root / "skills/p/references/patterns/query-objects.md").write_text(
+        "# Query Objects\n"
+        "See [reference](<relative path to reference>).\n"
+        "And [command](<command name>).\n"
+    )
+    broken = validate_links(root)
+    assert len(broken) == 2
+    assert all(b.kind == "placeholder" for b in broken)
+    targets = sorted(b.target_path for b in broken)
+    assert targets == ["<command name>", "<relative path to reference>"]
+
+
+def test_validate_links_flags_double_brace_placeholders(tmp_path: Path) -> None:
+    root = _mkplugin(tmp_path)
+    (root / "skills/p/references/patterns/query-objects.md").write_text(
+        "[slipped template](../{{plan_tree_path}}.md)\n"
+    )
+    broken = validate_links(root)
+    assert len(broken) == 1
+    assert broken[0].kind == "placeholder"
+
+
+# ---------------------------------------------------------------------------
+# Template leak scanner tests
+# ---------------------------------------------------------------------------
+
+
+def test_find_template_leaks_detects_double_brace_placeholders(tmp_path: Path) -> None:
+    root = _mkplugin(tmp_path)
+    (root / "skills/p/references/patterns/service-objects.md").write_text(
+        "# Service Objects\n\nThe plugin is {{plugin_name}}.\n"
+    )
+    leaks = find_template_leaks(root)
+    assert len(leaks) == 1
+    assert leaks[0].placeholder == "{{plugin_name}}"
+    assert leaks[0].line_number == 3
+
+
+def test_find_template_leaks_returns_empty_on_clean_tree(tmp_path: Path) -> None:
+    root = _mkplugin(tmp_path)
+    (root / "skills/p/references/patterns/service-objects.md").write_text(
+        "# Service Objects\n\nRegular body text with no placeholders.\n"
+    )
+    assert find_template_leaks(root) == []
+
+
+def test_find_template_leaks_ignores_single_braces(tmp_path: Path) -> None:
+    """Code examples often contain literal { and } — don't false-positive on them."""
+    root = _mkplugin(tmp_path)
+    (root / "skills/p/references/patterns/service-objects.md").write_text(
+        "# Service Objects\n\n```ruby\ndef call(**opts); { ok: true }; end\n```\n"
+    )
+    assert find_template_leaks(root) == []

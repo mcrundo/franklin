@@ -8,5 +8,12 @@ on any earlier stage.
 
 from franklin.assembler.links import BrokenLink, validate_links
 from franklin.assembler.manifest import write_plugin_manifest
+from franklin.assembler.templates import TemplateLeak, find_template_leaks
 
-__all__ = ["BrokenLink", "validate_links", "write_plugin_manifest"]
+__all__ = [
+    "BrokenLink",
+    "TemplateLeak",
+    "find_template_leaks",
+    "validate_links",
+    "write_plugin_manifest",
+]

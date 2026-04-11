@@ -12,7 +12,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from franklin.assembler import BrokenLink, validate_links, write_plugin_manifest
+from franklin.assembler import (
+    BrokenLink,
+    TemplateLeak,
+    find_template_leaks,
+    validate_links,
+    write_plugin_manifest,
+)
 from franklin.checkpoint import RunDirectory, slugify
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_epub
@@ -595,32 +601,75 @@ def assemble_pipeline(
     )
 
     broken_links = validate_links(plugin_root)
+    template_leaks = find_template_leaks(plugin_root)
+
     if broken_links:
         _print_broken_links(plugin_root, broken_links)
     else:
         console.print("[green]✓[/green] all markdown links resolve")
 
+    if template_leaks:
+        _print_template_leaks(plugin_root, template_leaks)
+    else:
+        console.print("[green]✓[/green] no unfilled template placeholders")
+
     console.print()
-    if broken_links:
+    issue_count = len(broken_links) + len(template_leaks)
+    if issue_count:
         console.print(
-            f"[yellow]⚠ assemble finished with {len(broken_links)} broken link(s)[/yellow]"
+            f"[yellow]⚠ assemble finished with {issue_count} issue(s)[/yellow]"
         )
     else:
         console.print(f"[green]✓[/green] assemble complete: {plugin_root}")
 
 
 def _print_broken_links(plugin_root: Path, broken: list[BrokenLink]) -> None:
-    console.print()
-    console.print(f"[red]✗[/red] {len(broken)} broken link(s):")
+    missing = [b for b in broken if b.kind == "missing"]
+    placeholder = [b for b in broken if b.kind == "placeholder"]
 
+    if missing:
+        console.print()
+        console.print(f"[red]✗[/red] {len(missing)} broken link(s):")
+        table = Table(show_header=True, header_style="bold red")
+        table.add_column("Source file", style="cyan", overflow="fold")
+        table.add_column("Line", justify="right")
+        table.add_column("Target path", overflow="fold")
+        table.add_column("Link text", overflow="fold")
+        for link in missing:
+            source = str(link.source_file.relative_to(plugin_root))
+            table.add_row(
+                source, str(link.line_number), link.target_path, link.link_text
+            )
+        console.print(table)
+
+    if placeholder:
+        console.print()
+        console.print(
+            f"[red]✗[/red] {len(placeholder)} unfilled placeholder link(s):"
+        )
+        table = Table(show_header=True, header_style="bold red")
+        table.add_column("Source file", style="cyan", overflow="fold")
+        table.add_column("Line", justify="right")
+        table.add_column("Placeholder target", overflow="fold")
+        for link in placeholder:
+            source = str(link.source_file.relative_to(plugin_root))
+            table.add_row(source, str(link.line_number), link.target_path)
+        console.print(table)
+
+
+def _print_template_leaks(plugin_root: Path, leaks: list[TemplateLeak]) -> None:
+    console.print()
+    console.print(f"[red]✗[/red] {len(leaks)} unfilled template placeholder(s):")
     table = Table(show_header=True, header_style="bold red")
     table.add_column("Source file", style="cyan", overflow="fold")
     table.add_column("Line", justify="right")
-    table.add_column("Target path", overflow="fold")
-    table.add_column("Link text", overflow="fold")
-    for link in broken:
-        source = str(link.source_file.relative_to(plugin_root))
-        table.add_row(source, str(link.line_number), link.target_path, link.link_text)
+    table.add_column("Placeholder", overflow="fold")
+    table.add_column("Context", overflow="fold")
+    for leak in leaks:
+        source = str(leak.source_file.relative_to(plugin_root))
+        table.add_row(
+            source, str(leak.line_number), leak.placeholder, leak.context
+        )
     console.print(table)
 
 

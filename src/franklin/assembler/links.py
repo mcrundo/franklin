@@ -33,13 +33,21 @@ _EXTERNAL_PREFIXES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class BrokenLink:
-    """One relative link whose target file does not exist."""
+    """One relative link that is either missing or an unfilled placeholder.
+
+    `kind` distinguishes:
+    - "missing" — a well-formed relative path whose target file does not exist
+    - "placeholder" — a target that looks like an unfilled template slot
+      (contains `<...>`, `{{...}}`, or similar), so the model forgot to
+      substitute a real value before emitting the link
+    """
 
     source_file: Path
     line_number: int
     link_text: str
     target_path: str
     resolved_path: Path
+    kind: str = "missing"
 
 
 def validate_links(plugin_root: Path) -> list[BrokenLink]:
@@ -49,6 +57,11 @@ def validate_links(plugin_root: Path) -> list[BrokenLink]:
     (http://, mailto:, etc.) or a same-file anchor (#section) is skipped.
     Fragments on otherwise-valid paths (`file.md#anchor`) are stripped before
     resolving the file.
+
+    Targets that contain placeholder syntax (`<...>`, `{{...}}`) are reported
+    with `kind="placeholder"` without resolving the path, so callers can
+    distinguish "generator leaked a template slot" from "generator invented
+    a real-looking path that doesn't exist."
     """
     broken: list[BrokenLink] = []
     for md_file in sorted(plugin_root.rglob("*.md")):
@@ -67,6 +80,19 @@ def _validate_file(md_file: Path) -> list[BrokenLink]:
             if _is_external_or_same_file_anchor(target):
                 continue
 
+            if _looks_like_placeholder(target):
+                broken.append(
+                    BrokenLink(
+                        source_file=md_file,
+                        line_number=line_number,
+                        link_text=link_text,
+                        target_path=target,
+                        resolved_path=md_file.parent / target,
+                        kind="placeholder",
+                    )
+                )
+                continue
+
             # Strip URL fragment (e.g. "path/to/file.md#section" -> "path/to/file.md")
             path_only = target.split("#", maxsplit=1)[0].strip()
             if not path_only:
@@ -82,6 +108,7 @@ def _validate_file(md_file: Path) -> list[BrokenLink]:
                         link_text=link_text,
                         target_path=target,
                         resolved_path=resolved,
+                        kind="missing",
                     )
                 )
     return broken
@@ -89,3 +116,22 @@ def _validate_file(md_file: Path) -> list[BrokenLink]:
 
 def _is_external_or_same_file_anchor(target: str) -> bool:
     return target.startswith(_EXTERNAL_PREFIXES) or target.startswith("#")
+
+
+def _looks_like_placeholder(target: str) -> bool:
+    """Detect unfilled template placeholders in a link target.
+
+    Flags:
+    - `{{...}}` — Franklin's own template variable syntax
+    - `<...>` with any angle bracket character — descriptive placeholders
+      like `<relative path to reference>` or `<command name>`
+
+    Scoped to link targets only; the general `find_template_leaks` scanner
+    handles body-text leaks where angle brackets might be legitimate prose.
+    """
+    return (
+        "{{" in target
+        or "}}" in target
+        or "<" in target
+        or ">" in target
+    )
