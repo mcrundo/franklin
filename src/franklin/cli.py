@@ -19,10 +19,14 @@ from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
 from franklin.planner import build_user_prompt as build_plan_prompt
 from franklin.planner import design_plan
+from franklin.reducer import DEFAULT_MODEL as REDUCER_DEFAULT_MODEL
+from franklin.reducer import generate_artifact
 from franklin.schema import (
+    Artifact,
     ArtifactType,
     BookManifest,
     ChapterKind,
+    ChapterSidecar,
     NormalizedChapter,
     PlanManifest,
 )
@@ -372,6 +376,160 @@ def _print_plan_summary(
         f"Review the plan at [cyan]{run.plan_json}[/cyan] and edit as needed.\n"
         "Next: [bold]franklin reduce[/bold] (coming soon) to generate each artifact."
     )
+
+
+@app.command(name="reduce")
+def reduce_pipeline(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory with plan.json"
+    ),
+    artifact: str | None = typer.Option(
+        None,
+        "--artifact",
+        "-a",
+        help="Generate just this artifact id",
+    ),
+    model: str = typer.Option(
+        REDUCER_DEFAULT_MODEL, "--model", help="Anthropic model ID for generation"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Regenerate artifacts whose output file already exists"
+    ),
+) -> None:
+    """Generate each artifact file from the plan using its feeds_from slice."""
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(
+            f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first"
+        )
+        raise typer.Exit(code=1)
+
+    manifest = run.load_book()
+    plan = run.load_plan()
+    sidecar_ids = [p.stem for p in sorted(run.chapters_dir.glob("*.json"))]
+    if not sidecar_ids:
+        console.print(
+            f"[red]error:[/red] no sidecars in {run.chapters_dir} — run `franklin map` first"
+        )
+        raise typer.Exit(code=1)
+    sidecars = {cid: run.load_sidecar(cid) for cid in sidecar_ids}
+
+    targets = _select_artifacts(plan, artifact)
+    if not targets:
+        console.print("[yellow]no artifacts to generate[/yellow]")
+        raise typer.Exit(code=0)
+
+    try:
+        ensure_anthropic_api_key()
+    except MissingApiKeyError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _generate_artifacts(
+        run, plan=plan, book=manifest, sidecars=sidecars, targets=targets,
+        model=model, force=force,
+    )
+
+
+def _select_artifacts(plan: PlanManifest, artifact_id: str | None) -> list[Artifact]:
+    if artifact_id is None:
+        return list(plan.artifacts)
+    for art in plan.artifacts:
+        if art.id == artifact_id:
+            return [art]
+    console.print(
+        f"[red]error:[/red] no artifact with id {artifact_id!r} in plan "
+        f"(available: {', '.join(a.id for a in plan.artifacts)})"
+    )
+    raise typer.Exit(code=1)
+
+
+def _generate_artifacts(
+    run: RunDirectory,
+    *,
+    plan: PlanManifest,
+    book: BookManifest,
+    sidecars: dict[str, ChapterSidecar],
+    targets: list[Artifact],
+    model: str,
+    force: bool,
+) -> None:
+    output_root = run.output_dir / plan.plugin.name
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    console.print(
+        f"[bold]Generating[/bold] {len(targets)} artifacts for "
+        f"[cyan]{plan.plugin.name}[/cyan] using [dim]{model}[/dim]"
+    )
+    console.print(f"  output: {output_root}")
+    console.print()
+
+    totals = {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_creation": 0,
+        "generated": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+
+    for artifact in targets:
+        out_path = output_root / artifact.path
+        if out_path.exists() and not force:
+            console.print(
+                f"[dim]skip[/dim] {artifact.id} — {artifact.path} already exists"
+            )
+            totals["skipped"] += 1
+            continue
+
+        console.print(
+            f"[bold]{artifact.type.value}[/bold] {artifact.id} → [cyan]{artifact.path}[/cyan]"
+        )
+        try:
+            result = generate_artifact(
+                artifact,
+                plan=plan,
+                book=book,
+                sidecars=sidecars,
+                model=model,
+            )
+        except Exception as exc:
+            console.print(f"  [red]✗ failed[/red]: {exc}")
+            totals["failed"] += 1
+            continue
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            result.content if result.content.endswith("\n") else result.content + "\n"
+        )
+
+        totals["input"] += result.input_tokens
+        totals["output"] += result.output_tokens
+        totals["cache_read"] += result.cache_read_tokens
+        totals["cache_creation"] += result.cache_creation_tokens
+        totals["generated"] += 1
+
+        cache_note = ""
+        if result.cache_read_tokens:
+            cache_note = f", [green]{result.cache_read_tokens:,} cached[/green]"
+        console.print(
+            f"  [green]✓[/green] {len(result.content):,} chars "
+            f"([dim]{result.input_tokens:,} in / {result.output_tokens:,} out{cache_note}[/dim])"
+        )
+
+    console.print()
+    console.print(
+        f"[green]✓[/green] reduce stage complete: "
+        f"{totals['generated']} generated, {totals['skipped']} skipped, "
+        f"{totals['failed']} failed"
+    )
+    console.print(
+        f"  [dim]{totals['input']:,} input / {totals['output']:,} output / "
+        f"{totals['cache_read']:,} cache-read / "
+        f"{totals['cache_creation']:,} cache-write tokens[/dim]"
+    )
+    console.print(f"  plugin tree: [cyan]{output_root}[/cyan]")
 
 
 @app.command(name="run")
