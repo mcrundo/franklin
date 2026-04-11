@@ -24,7 +24,13 @@ from franklin.assembler import (
     validate_links,
     write_plugin_manifest,
 )
-from franklin.checkpoint import RunDirectory, RunSummary, list_runs, slugify
+from franklin.checkpoint import (
+    RunDirectory,
+    RunSummary,
+    list_runs,
+    slugify,
+    summarize_run,
+)
 from franklin.classify import classify_chapters
 from franklin.grading import RunGrade, grade_run, write_metrics
 from franklin.ingest import UnsupportedFormatError, ingest_book
@@ -118,6 +124,50 @@ def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
         return RunDirectory(output)
     slug = slugify(book_path.stem)
     return RunDirectory(Path.cwd() / "runs" / slug)
+
+
+def _maybe_prompt_resume(run_dir: Path, *, yes: bool) -> None:
+    """If ``run_dir`` holds a partial run, show progress and confirm resume.
+
+    Uses ``summarize_run`` so the check is free on a never-run dir (no
+    book.json → stages_done == []). When there is work already done, we
+    either auto-confirm (``--yes``) or ask the user. Answering no aborts
+    with exit code 0 so scripts can tell "declined to resume" from
+    "command crashed."
+    """
+    summary = summarize_run(run_dir)
+    if not summary.stages_done:
+        return
+
+    all_stages = ("ingest", "map", "plan", "reduce", "assemble")
+    done = set(summary.stages_done)
+    console.print()
+    console.print(f"[bold]Found existing run at[/bold] [cyan]{run_dir}[/cyan]")
+    if summary.title:
+        console.print(f"  [dim]{summary.title}[/dim]")
+    for stage in all_stages:
+        mark = "[green]✓[/green]" if stage in done else "[dim]○[/dim]"
+        console.print(f"  {mark} {stage}")
+    console.print()
+    next_stage = next((s for s in all_stages if s not in done), None)
+    if next_stage is None:
+        console.print(
+            "  [green]All stages complete.[/green] "
+            "Use [cyan]--force[/cyan] to re-run from the start."
+        )
+        raise typer.Exit(code=0)
+
+    console.print(
+        f"  Will resume from [yellow]{next_stage}[/yellow]. "
+        f"Use [cyan]--force[/cyan] to re-run from the start instead."
+    )
+    console.print()
+
+    if yes:
+        return
+    if not typer.confirm("Resume this run?", default=True):
+        console.print("[dim]aborted.[/dim]")
+        raise typer.Exit(code=0)
 
 
 @app.command()
@@ -1224,6 +1274,12 @@ def run_pipeline(
         None, "--output", "-o", help="Run directory (default: ./runs/<slug>)"
     ),
     force: bool = typer.Option(False, "--force", help="Re-run stages whose outputs already exist"),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Auto-confirm resuming a partial run without prompting",
+    ),
     push: bool = typer.Option(
         False, "--push", help="After assemble, push the plugin to GitHub (requires --repo)"
     ),
@@ -1244,6 +1300,10 @@ def run_pipeline(
     _validate_push_flags(push=push, repo=repo, branch=branch, create_pr=create_pr, public=public)
 
     run = _resolve_run_dir(book_path, output)
+
+    if run.root.exists() and not force:
+        _maybe_prompt_resume(run.root, yes=yes)
+
     run.ensure()
 
     console.rule(f"[bold]franklin run[/bold] — {book_path.name}")
