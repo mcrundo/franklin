@@ -54,6 +54,14 @@ Target length: the brief will include an estimated token count (typically 2500â€
 5. **Match the book's voice** per the coherence rules above.
 6. **Frontmatter is required.** Emit the YAML block at the top.
 
+## Full plugin file tree
+
+Every relative markdown link in this file must point to a path that exists in the list below. **Do not invent paths.** Link to every reference file in this tree from SKILL.md â€” the router's job is to be the single entry point for the whole plugin.
+
+{{plan_tree}}
+
+**Computing relative paths:** the SKILL.md lives at `skills/<plugin>/SKILL.md`. From there, linking to a reference is `references/patterns/X.md` (no leading `../`). Linking to a command is `../../commands/X.md` and linking to an agent is `../../agents/X.md`.
+
 <!-- CACHE-BREAKPOINT -->
 
 ## This specific SKILL.md
@@ -63,10 +71,6 @@ Target length: the brief will include an estimated token count (typically 2500â€
 **Brief:** {{artifact_brief}}
 
 **Plugin name (for frontmatter):** `{{plugin_name}}`
-
-**Full plan structure you should link to (all artifacts in the plugin):**
-
-{{plan_tree}}
 
 **Sidecar slice to work from:**
 

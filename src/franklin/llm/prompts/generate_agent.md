@@ -47,9 +47,17 @@ Target length: the brief will include an estimated token count (typically 2500�
 1. **Ground the agent in the book.** Its principles, checks, and procedure should draw directly from the sidecar content (rules, anti-patterns, actionable_workflows, decision_rules). Do not invent capabilities.
 2. **Be concrete about inputs.** Say what the agent expects the user to provide ("a file path", "a class name", "a diff").
 3. **Be concrete about outputs.** Reviewers report findings; planners sequence steps. Describe the exact shape.
-4. **Cite references.** When the agent needs to apply a specific rule, point at the relevant reference file (`skills/<plugin>/references/patterns/X.md`).
+4. **Cite reference files** for specific rules or patterns. See the plugin file tree below for the only valid link targets.
 5. **One agent, one job.** Do not bundle reviewer and planner behavior into one agent — if the plan has both, generate both as separate files.
 6. **Frontmatter is required with the plugin-prefixed name.**
+
+## Full plugin file tree
+
+Every relative markdown link in this file must point to a path that exists in the list below. **Do not invent paths or link to files not listed here.** If the concept you want to link to doesn't have a reference file in this plugin, don't link at all — describe the concept inline instead.
+
+{{plan_tree}}
+
+**Computing relative paths:** the file you're generating will live at the path shown in the "This specific agent" section below (typically `agents/X.md`). From there, linking to a reference means traversing up and then into skills: `../skills/<plugin>/references/patterns/X.md`. Linking to a command is `../commands/X.md`.
 
 <!-- CACHE-BREAKPOINT -->
 

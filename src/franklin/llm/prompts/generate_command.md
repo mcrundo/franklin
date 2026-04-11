@@ -44,8 +44,16 @@ Target length: the brief will include an estimated token count (typically 1000�
 2. **Speak to Claude, not to the user.** The body is instructions Claude executes. Say "Read the target file", "Grep for X", "Use the Task tool to delegate Y" — not "You should think about".
 3. **Name specific tools** where applicable (Read, Grep, Glob, Edit, Task). The frontmatter doesn't need to list them — Claude has the default toolset.
 4. **Include a verify step.** Every command must end with a clear way to tell whether the extraction, refactor, or analysis succeeded.
-5. **Link to a reference file** for deeper patterns when the command touches a specific pattern (e.g., `../skills/<plugin>/references/patterns/service-objects.md`).
+5. **Link to reference files** for deeper pattern explanations. See the plugin file tree below for the only valid link targets.
 6. **Frontmatter is required.**
+
+## Full plugin file tree
+
+Every relative markdown link in this file must point to a path that exists in the list below. **Do not invent paths or link to files not listed here.** If the concept you want to link to doesn't have a reference file in this plugin, don't link at all — describe the concept inline instead.
+
+{{plan_tree}}
+
+**Computing relative paths:** the file you're generating will live at the path shown in the "This specific command" section below (typically `commands/X.md`). From there, linking to a reference means traversing up and then into skills: `../skills/<plugin>/references/patterns/X.md`. Linking to another command in the same directory is just `X.md`.
 
 <!-- CACHE-BREAKPOINT -->
 

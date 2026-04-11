@@ -188,9 +188,11 @@ def test_build_template_vars_includes_coherence_and_context() -> None:
     assert "Layered Design" in vars["book_context"]
     assert "ch04.concept.service-object" in vars["resolved_context"]
     assert vars["artifact_path"].endswith("service-objects.md")
-    # Skill-only vars are absent for reference artifacts
+    # plan_tree is now included for every artifact type so generators can
+    # produce correct relative links. plugin_name remains skill-only.
+    assert "plan_tree" in vars
+    assert "service-objects.md" in vars["plan_tree"]
     assert "plugin_name" not in vars
-    assert "plan_tree" not in vars
 
 
 def test_build_template_vars_adds_plugin_tree_for_skill() -> None:

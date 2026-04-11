@@ -28,9 +28,17 @@ Target length: the brief will include an estimated token count (typically 2000�
 1. **Quote the book.** Use concepts, definitions, rules, and code examples from the sidecar data verbatim or near-verbatim. Do not invent examples or fabricate API details.
 2. **Preserve code exactly.** Code blocks must be copied as-is including whitespace. Use the author's own labels ("Listing 3.1") when the sidecar records one.
 3. **Cite sparingly.** An italicized `_source: chNN §X_` at the end of a non-obvious claim is enough. Do not cite every sentence.
-4. **Link, don't duplicate.** Cross-reference other pattern files with relative markdown links (`../patterns/service-objects.md`) when the topic overlaps. The reducer will validate links after.
+4. **Link, don't duplicate.** Cross-reference other files with relative markdown links when the topic overlaps. See the plugin file tree below for the only valid link targets.
 5. **Start with the problem.** Follow the book's teaching pattern — show the Rails-native approach first, name the trigger that prompts extraction, then present the pattern.
 6. **No frontmatter.** Reference files are plain markdown only.
+
+## Full plugin file tree
+
+Every relative markdown link in this file must point to a path that exists in the list below. **Do not invent paths or link to files not listed here.** If the concept you want to link to doesn't have a reference file in this plugin, don't link at all — describe the concept inline instead.
+
+{{plan_tree}}
+
+**Computing relative paths:** the file you're generating will live at the path shown in the "This specific reference" section below. Compute every relative link from that starting directory. For example, from `skills/<plugin>/references/patterns/X.md`, linking to another patterns file is `other-pattern.md`, linking to a core file is `../core/other.md`, and linking to a command is `../../../commands/X.md`.
 
 <!-- CACHE-BREAKPOINT -->
 

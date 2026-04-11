@@ -174,17 +174,22 @@ def _build_template_vars(
         context.chapters_markdown or "_(no sidecar slice resolved)_"
     )
 
+    # plan_tree is included for every artifact type so generators can emit
+    # correct relative links between files. It lives in the cached prefix
+    # (it's stable across every call in a run), which has the side benefit
+    # of pushing the cached block past Anthropic's 1024-token minimum for
+    # eligibility so prompt caching actually fires on repeated calls.
     template_vars: dict[str, str] = {
         "coherence_rules": coherence_rules,
         "book_context": book_context,
         "artifact_path": artifact.path,
         "artifact_brief": artifact.brief,
         "resolved_context": resolved_context,
+        "plan_tree": _render_plan_tree(plan),
     }
 
     if artifact.type == ArtifactType.SKILL:
         template_vars["plugin_name"] = plan.plugin.name
-        template_vars["plan_tree"] = _render_plan_tree(plan)
 
     return template_vars
 
