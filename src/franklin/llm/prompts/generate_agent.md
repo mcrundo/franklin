@@ -50,6 +50,7 @@ Target length: the brief will include an estimated token count (typically 2500�
 4. **Cite reference files** for specific rules or patterns. See the plugin file tree below for the only valid link targets.
 5. **One agent, one job.** Do not bundle reviewer and planner behavior into one agent — if the plan has both, generate both as separate files.
 6. **Frontmatter is required with the plugin-prefixed name.**
+7. **No placeholders in output — especially in Output Format examples.** Your generated agent file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<command name>`, `<relative path to reference>`, `<reference file name>`, etc). When showing an example output format in the agent's body, use **real** file paths from the plugin tree below and **real** command/reference names — not descriptive placeholders like `<relative path to X>`. If the example would be less clear with real values, describe it in prose instead of pretending to show a link.
 
 ## Full plugin file tree
 

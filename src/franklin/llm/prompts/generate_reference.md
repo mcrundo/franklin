@@ -31,6 +31,7 @@ Target length: the brief will include an estimated token count (typically 2000â€
 4. **Link, don't duplicate.** Cross-reference other files with relative markdown links when the topic overlaps. See the plugin file tree below for the only valid link targets.
 5. **Start with the problem.** Follow the book's teaching pattern â€” show the Rails-native approach first, name the trigger that prompts extraction, then present the pattern.
 6. **No frontmatter.** Reference files are plain markdown only.
+7. **No placeholders in output.** Your generated file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<relative path to reference>`, `<command name>`, etc). Fill every value in with a real, literal string. If you are tempted to write an example path in a form like `<path/to/file>`, either write out a specific real path from the plugin tree or describe the concept in prose without a link.
 
 ## Full plugin file tree
 

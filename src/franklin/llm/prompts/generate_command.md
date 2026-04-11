@@ -46,6 +46,7 @@ Target length: the brief will include an estimated token count (typically 1000â€
 4. **Include a verify step.** Every command must end with a clear way to tell whether the extraction, refactor, or analysis succeeded.
 5. **Link to reference files** for deeper pattern explanations. See the plugin file tree below for the only valid link targets.
 6. **Frontmatter is required.**
+7. **No placeholders in output.** Your generated command file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<command name>`, `<relative path to reference>`, etc). Fill every value with a real literal. Never emit a link whose target is a description like `<relative path to X>` â€” write out the actual path from the file tree, or omit the link entirely.
 
 ## Full plugin file tree
 

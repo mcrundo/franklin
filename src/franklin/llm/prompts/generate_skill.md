@@ -53,6 +53,7 @@ Target length: the brief will include an estimated token count (typically 2500�
 4. **Keep prose short.** Anywhere you're tempted to write a paragraph of explanation, consider whether it belongs in a reference file instead and whether the SKILL.md should just link there.
 5. **Match the book's voice** per the coherence rules above.
 6. **Frontmatter is required.** Emit the YAML block at the top.
+7. **No placeholders in output.** Your generated SKILL.md must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens. Fill every value in with a real literal — the plugin name, real file paths, real command names — never with angle-bracket descriptions.
 
 ## Full plugin file tree
 
