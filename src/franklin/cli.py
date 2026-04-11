@@ -1,11 +1,12 @@
 """Franklin CLI entrypoint.
 
 Exposes per-stage commands (ingest, map, plan, reduce, assemble) plus
-a top-level `run` that chains them. Only ingest is wired up in v0.1.
+a top-level `run` that chains them end-to-end.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -198,9 +199,7 @@ def _select_targets(
     return [run.load_raw_chapter(cid) for cid in content_ids]
 
 
-def _dry_run_prompt(
-    run: RunDirectory, manifest: BookManifest, chapter: NormalizedChapter
-) -> None:
+def _dry_run_prompt(run: RunDirectory, manifest: BookManifest, chapter: NormalizedChapter) -> None:
     prompt = build_user_prompt(manifest, chapter)
     console.print(f"[bold]Dry run[/bold] — prompt for {chapter.chapter_id} ({chapter.title})")
     console.print(f"  run dir: {run.root}")
@@ -274,9 +273,7 @@ def plan_pipeline(
     """Design the plugin architecture from the distilled sidecars."""
     run = RunDirectory(run_dir)
     if not run.book_json.exists():
-        console.print(
-            f"[red]error:[/red] no book.json in {run_dir} — run `franklin ingest` first"
-        )
+        console.print(f"[red]error:[/red] no book.json in {run_dir} — run `franklin ingest` first")
         raise typer.Exit(code=1)
 
     manifest = run.load_book()
@@ -331,9 +328,7 @@ def _print_plan_summary(
 
     console.print()
     console.print(f"[green]✓[/green] plan saved to {run.plan_json}")
-    console.print(
-        f"  [dim]{input_tokens:,} input tokens / {output_tokens:,} output tokens[/dim]"
-    )
+    console.print(f"  [dim]{input_tokens:,} input tokens / {output_tokens:,} output tokens[/dim]")
     console.print()
     console.print(f"[bold]Plugin:[/bold] {plan.plugin.name} [dim]v{plan.plugin.version}[/dim]")
     if plan.plugin.description:
@@ -415,9 +410,7 @@ def reduce_pipeline(
     """Generate each artifact file from the plan using its feeds_from slice."""
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
-        console.print(
-            f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first"
-        )
+        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
         raise typer.Exit(code=1)
 
     manifest = run.load_book()
@@ -442,8 +435,13 @@ def reduce_pipeline(
         raise typer.Exit(code=1) from exc
 
     _generate_artifacts(
-        run, plan=plan, book=manifest, sidecars=sidecars, targets=targets,
-        model=model, force=force,
+        run,
+        plan=plan,
+        book=manifest,
+        sidecars=sidecars,
+        targets=targets,
+        model=model,
+        force=force,
     )
 
 
@@ -468,8 +466,7 @@ def _select_artifacts(
         except ValueError:
             valid = ", ".join(t.value for t in ArtifactType)
             console.print(
-                f"[red]error:[/red] unknown artifact type {type_filter!r} "
-                f"(valid: {valid})"
+                f"[red]error:[/red] unknown artifact type {type_filter!r} (valid: {valid})"
             )
             raise typer.Exit(code=1) from None
         return [a for a in plan.artifacts if a.type == kind]
@@ -510,9 +507,7 @@ def _generate_artifacts(
     for artifact in targets:
         out_path = output_root / artifact.path
         if out_path.exists() and not force:
-            console.print(
-                f"[dim]skip[/dim] {artifact.id} — {artifact.path} already exists"
-            )
+            console.print(f"[dim]skip[/dim] {artifact.id} — {artifact.path} already exists")
             totals["skipped"] += 1
             continue
 
@@ -579,17 +574,14 @@ def assemble_pipeline(
     """Assemble the generated plugin tree: write plugin.json and report."""
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
-        console.print(
-            f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first"
-        )
+        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
         raise typer.Exit(code=1)
 
     plan = run.load_plan()
     plugin_root = run.output_dir / plan.plugin.name
     if not plugin_root.exists():
         console.print(
-            f"[red]error:[/red] no generated plugin at {plugin_root} — "
-            "run `franklin reduce` first"
+            f"[red]error:[/red] no generated plugin at {plugin_root} — run `franklin reduce` first"
         )
         raise typer.Exit(code=1)
 
@@ -598,15 +590,11 @@ def assemble_pipeline(
     console.print()
 
     manifest_path = write_plugin_manifest(plugin_root, plan.plugin)
-    console.print(
-        f"[green]✓[/green] wrote {manifest_path.relative_to(plugin_root)}"
-    )
+    console.print(f"[green]✓[/green] wrote {manifest_path.relative_to(plugin_root)}")
 
     files = sorted(p for p in plugin_root.rglob("*") if p.is_file())
     markdown_files = [p for p in files if p.suffix == ".md"]
-    console.print(
-        f"  {len(files)} files total ({len(markdown_files)} markdown)"
-    )
+    console.print(f"  {len(files)} files total ({len(markdown_files)} markdown)")
 
     broken_links = validate_links(plugin_root)
     template_leaks = find_template_leaks(plugin_root)
@@ -630,9 +618,7 @@ def assemble_pipeline(
     console.print()
     issue_count = len(broken_links) + len(template_leaks) + len(frontmatter_issues)
     if issue_count:
-        console.print(
-            f"[yellow]⚠ assemble finished with {issue_count} issue(s)[/yellow]"
-        )
+        console.print(f"[yellow]⚠ assemble finished with {issue_count} issue(s)[/yellow]")
     else:
         console.print(f"[green]✓[/green] assemble complete: {plugin_root}")
 
@@ -660,16 +646,12 @@ def _print_broken_links(plugin_root: Path, broken: list[BrokenLink]) -> None:
         table.add_column("Link text", overflow="fold")
         for link in missing:
             source = str(link.source_file.relative_to(plugin_root))
-            table.add_row(
-                source, str(link.line_number), link.target_path, link.link_text
-            )
+            table.add_row(source, str(link.line_number), link.target_path, link.link_text)
         console.print(table)
 
     if placeholder:
         console.print()
-        console.print(
-            f"[red]✗[/red] {len(placeholder)} unfilled placeholder link(s):"
-        )
+        console.print(f"[red]✗[/red] {len(placeholder)} unfilled placeholder link(s):")
         table = Table(show_header=True, header_style="bold red")
         table.add_column("Source file", style="cyan", overflow="fold")
         table.add_column("Line", justify="right")
@@ -690,15 +672,11 @@ def _print_template_leaks(plugin_root: Path, leaks: list[TemplateLeak]) -> None:
     table.add_column("Context", overflow="fold")
     for leak in leaks:
         source = str(leak.source_file.relative_to(plugin_root))
-        table.add_row(
-            source, str(leak.line_number), leak.placeholder, leak.context
-        )
+        table.add_row(source, str(leak.line_number), leak.placeholder, leak.context)
     console.print(table)
 
 
-def _print_frontmatter_issues(
-    plugin_root: Path, issues: list[FrontmatterIssue]
-) -> None:
+def _print_frontmatter_issues(plugin_root: Path, issues: list[FrontmatterIssue]) -> None:
     console.print()
     console.print(f"[red]✗[/red] {len(issues)} frontmatter issue(s):")
     table = Table(show_header=True, header_style="bold red")
@@ -714,12 +692,80 @@ def _print_frontmatter_issues(
 
 @app.command(name="run")
 def run_pipeline(
-    book_path: Path = typer.Argument(..., exists=True, readable=True),
-    output: Path | None = typer.Option(None, "--output", "-o"),
+    book_path: Path = typer.Argument(..., exists=True, readable=True, help="Path to .epub"),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Run directory (default: ./runs/<slug>)"
+    ),
+    force: bool = typer.Option(False, "--force", help="Re-run stages whose outputs already exist"),
 ) -> None:
-    """Run the full pipeline end-to-end. [v0.1: ingest + classify only]"""
-    ingest(book_path=book_path, output=output)
-    console.print("[yellow]map / plan / reduce / assemble: not yet wired into run[/yellow]")
+    """Run the full pipeline end-to-end: ingest → map → plan → reduce → assemble."""
+    run = _resolve_run_dir(book_path, output)
+    run.ensure()
+
+    console.rule(f"[bold]franklin run[/bold] — {book_path.name}")
+    console.print(f"  run directory: {run.root}")
+    if force:
+        console.print("  [yellow]--force[/yellow]: re-running existing stages")
+    console.print()
+
+    stages: list[tuple[str, Callable[[], None]]] = [
+        ("ingest", lambda: ingest(book_path=book_path, output=run.root)),
+        (
+            "map",
+            lambda: map_chapters(
+                run_dir=run.root,
+                chapter=None,
+                model=DEFAULT_MODEL,
+                dry_run=False,
+                force=force,
+            ),
+        ),
+        (
+            "plan",
+            lambda: plan_pipeline(
+                run_dir=run.root,
+                model=PLANNER_DEFAULT_MODEL,
+                dry_run=False,
+                force=force,
+            ),
+        ),
+        (
+            "reduce",
+            lambda: reduce_pipeline(
+                run_dir=run.root,
+                artifact=None,
+                type_filter=None,
+                model=REDUCER_DEFAULT_MODEL,
+                force=force,
+            ),
+        ),
+        ("assemble", lambda: assemble_pipeline(run_dir=run.root, zip_archive=False)),
+    ]
+
+    for name, fn in stages:
+        # `plan` is the only stage whose standalone command refuses to run
+        # when its output already exists. In run's resume-on-disk semantics
+        # that should be a skip, not a failure.
+        if name == "plan" and run.plan_json.exists() and not force:
+            console.rule(f"[dim]skip {name} — plan.json exists (use --force to regenerate)[/dim]")
+            console.print()
+            continue
+
+        console.rule(f"[bold cyan]{name}[/bold cyan]")
+        try:
+            fn()
+        except typer.Exit as exc:
+            if exc.exit_code:
+                console.print(f"[red]✗ {name} stage failed (exit code {exc.exit_code})[/red]")
+                raise typer.Exit(code=exc.exit_code) from exc
+            # exit_code 0 is a graceful "nothing to do" — continue to next stage.
+        except Exception as exc:
+            console.print(f"[red]✗ {name} stage raised {type(exc).__name__}: {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        console.print()
+
+    console.rule("[bold green]pipeline complete[/bold green]")
+    console.print(f"[green]✓[/green] {run.root}")
 
 
 if __name__ == "__main__":
