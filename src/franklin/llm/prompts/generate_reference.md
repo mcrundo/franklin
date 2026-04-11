@@ -38,7 +38,15 @@ Every relative markdown link in this file must point to a path that exists in th
 
 {{plan_tree}}
 
-**Computing relative paths:** the file you're generating will live at the path shown in the "This specific reference" section below. Compute every relative link from that starting directory. For example, from `skills/<plugin>/references/patterns/X.md`, linking to another patterns file is `other-pattern.md`, linking to a core file is `../core/other.md`, and linking to a command is `../../../commands/X.md`.
+**Computing relative paths:** the file you're generating will live at the path shown in the "This specific reference" section below. Compute every relative link from that starting directory. Reference files sit **four levels deep** inside the plugin root (`skills/<plugin>/references/<category>/X.md`), so linking out of the references tree requires four `..` segments. From `skills/<plugin>/references/patterns/X.md`:
+
+- linking to a file in the same directory: `other-file.md`
+- linking to a sibling references subdirectory (core, topics, anti-patterns, examples): `../core/other.md`
+- linking to a command: `../../../../commands/X.md` (four levels up to the plugin root, then into `commands/`)
+- linking to an agent: `../../../../agents/X.md` (same depth as commands)
+- linking to the root SKILL.md: `../../SKILL.md`
+
+Count your `..` segments carefully. An off-by-one in the depth will produce a broken link.
 
 <!-- CACHE-BREAKPOINT -->
 
