@@ -26,10 +26,10 @@ The `description` should clearly say when Claude should use this skill — it's 
 
 1. `# Plugin Display Name` — heading (not the frontmatter name)
 2. **Short intro paragraph** (2–3 sentences) — what the skill does and who it's for
-3. **Orientation tables** — this is the main value of the router. Typical tables:
-   - A layer or concept map ("where does this code go?") linking to relevant references
-   - A pattern catalog table linking to each pattern reference file
-   - An anti-pattern quick-reference table with short descriptions and links
+3. **Orientation tables** — this is the main value of the router. Include ALL of the following that the sidecar data supports:
+   - **"Where does this code go?" routing table** (required if the book covers architecture/organization) — maps "what you're writing" to "where it belongs" with a link to the relevant reference
+   - **Pattern catalog table** — one row per pattern, with a one-line summary and link
+   - **Anti-pattern quick reference** (required if the book has anti-patterns) — columns: `| Anti-pattern | Why harmful | Reference |`. This is one of the highest-value sections — it gives users an instant overview of what NOT to do.
    - Common violations or triggers with links to guidance
 4. **"What would you like to do?" section** — 4–8 bullet points with user intents, each linking to a command, reference, or agent
 5. **Commands reference** — small table of available slash commands
