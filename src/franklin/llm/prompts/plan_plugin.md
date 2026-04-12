@@ -48,7 +48,7 @@ Read the distilled book below in full, then call the `save_plan_proposal` tool w
    - `id` — short stable identifier like `art.skill.root`, `art.ref.service-objects`, `art.agent.reviewer`, `art.cmd.review`
    - `type` — one of `skill`, `reference`, `command`, `agent`
    - `path` — the relative path inside the plugin tree (e.g. `skills/layered-rails/references/patterns/service-objects.md`)
-   - `brief` — one or two sentences describing what the file should contain
+   - `brief` — one or two sentences describing what the file should contain. For commands, start with an action verb ("Extract business logic from...", "Create a migration following...") — do NOT prefix with "Slash command to" or similar boilerplate.
    - `feeds_from` — list of **category-level** dotted paths into the sidecars. Valid categories: `concepts`, `principles`, `rules`, `anti_patterns`, `code_examples`, `decision_rules`, `actionable_workflows`, `terminology`, `cross_references`. Valid forms: `chNN` (whole sidecar), `chNN.concepts`, `chNN.anti_patterns`, `chNN.actionable_workflows`, `book.metadata`, `book.cross_chapter_themes`. **NEVER use individual item IDs** like `ch04.workflow.create-new-app` — only the category name after the dot (e.g. `ch04.actionable_workflows`).
    - `estimated_output_tokens` — a rough estimate (1500–4000 for a reference file, 500–2000 for a command, 2000–4000 for an agent).
 4. **coherence_rules** — 3–8 short instructions for the reduce stage to keep output consistent (terminology choices, citation style, linking conventions, voice).
@@ -64,6 +64,8 @@ Read the distilled book below in full, then call the `save_plan_proposal` tool w
 5. **Bias toward fewer, higher-quality reference files.** 15 well-designed references beat 40 bloated ones. Combining related concepts into one reference file is often the right call. *This bias applies to reference files only — it does NOT apply to commands, which should be harvested generously from actionable workflows, or to agents, which should be split by use case when the material supports both a reviewer and a planner.*
 6. **Invent category directories freely** when the book's material genuinely calls for one, but do not invent categories to pad the output.
 7. **Use lowercase-kebab-case** for file names, directory names, and artifact IDs.
+8. **Name commands as verb-noun pairs** (`extract-service`, `create-migration`, `write-system-test`). Generic names (`review`, `analyze`) are too vague — they should describe the specific action the command performs.
+9. **The SKILL.md must include an anti-pattern quick reference** if the book contains anti-patterns. A small table with columns `| Anti-pattern | Why harmful | Reference |` gives users an instant overview of what NOT to do. This is one of the highest-value sections in a plugin.
 
 ## Distilled Book
 

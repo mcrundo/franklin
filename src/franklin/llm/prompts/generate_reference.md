@@ -30,8 +30,9 @@ Target length: the brief will include an estimated token count (typically 2000�
 3. **Cite sparingly.** An italicized `_source: chNN §X_` at the end of a non-obvious claim is enough. Do not cite every sentence.
 4. **Link, don't duplicate.** Cross-reference other files with relative markdown links when the topic overlaps. See the plugin file tree below for the only valid link targets.
 5. **Start with the problem.** The "problem framing" section is mandatory. Name the pain before the pattern.
-6. **No frontmatter.** Reference files are plain markdown only.
-7. **No placeholders in output.** Your generated file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<relative path to reference>`, `<command name>`, etc). Fill every value in with a real, literal string. If you are tempted to write an example path in a form like `<path/to/file>`, either write out a specific real path from the plugin tree or describe the concept in prose without a link.
+6. **Show evolution, not just snapshots.** Where the sidecar data supports it, show code progressing through stages — the initial naive approach, the trigger that prompts extraction, the refactored result, then a "requirements change" step that demonstrates why the new structure is better (the change is localized instead of spread across the codebase). This narrative arc is more persuasive than before/after pairs.
+7. **No frontmatter.** Reference files are plain markdown only.
+8. **No placeholders in output.** Your generated file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<relative path to reference>`, `<command name>`, etc). Fill every value in with a real, literal string. If you are tempted to write an example path in a form like `<path/to/file>`, either write out a specific real path from the plugin tree or describe the concept in prose without a link.
 
 ## Full plugin file tree
 

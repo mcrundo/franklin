@@ -28,9 +28,35 @@ The body is a system prompt the agent reads. Use this structure:
 1. `# Agent Display Name` — heading
 2. **Role** — 2–3 sentences saying what the agent is, what it does, and the book it draws from
 3. **Principles** — the agent's core beliefs drawn from the book's principles. 4–8 short statements.
-4. **What this agent checks / does** — the concrete responsibilities. For a reviewer, list the rules and anti-patterns it enforces. For a planner/advisor, list the workflows it helps sequence.
+4. **What this agent checks / does** — the concrete responsibilities, organized as a **structured checklist table** (see below). For a reviewer, list every specific rule and anti-pattern it enforces. For a planner/advisor, list the workflows it helps sequence.
 5. **Procedure** — an ordered or numbered sequence the agent follows on each invocation. Concrete actions: read files, grep for patterns, identify candidates, report findings with severity, suggest extractions.
 6. **Output format** — describe the expected shape of the agent's response (sections, bullets, severity labels, file paths).
+
+### Structured checklist (required for reviewer agents)
+
+Reviewer agents MUST include a markdown table listing every specific violation they check for, with columns: `| Check | Signal | Severity |`. This makes the agent's behavior predictable and auditable — without it, the LLM driving the agent skips checks buried in prose paragraphs.
+
+Example:
+
+```markdown
+| Check | Signal | Severity |
+|-------|--------|----------|
+| Business logic in Active Record | Method with conditionals/branching in app/models/ | Critical |
+| Missing NOT NULL constraint | Column allows NULL but is required by business rules | Critical |
+| Callback with cross-model side effect | after_save that touches another model | High |
+| Fat controller | Controller action > 15 lines or contains conditionals | Medium |
+```
+
+### Severity tiers (required for reviewer agents)
+
+The agent's output format MUST group findings by severity and lead with the highest-severity items. Use these tiers:
+
+- **Critical** — data integrity risks, security issues, business logic in high-fan-in classes. Fix before merging.
+- **High** — architectural violations that compound over time. Fix in the current PR or the next.
+- **Medium** — convention violations, code organization issues. Fix when touching the file.
+- **Low** — style, naming, minor improvements. Optional.
+
+The agent should also include a "Fix these first" section at the top of its output listing the 3–5 highest-impact findings, so teams don't get overwhelmed by a long list.
 
 Target length: the brief will include an estimated token count (typically 2500–4000). Agents benefit from rich system prompts — take the budget.
 
