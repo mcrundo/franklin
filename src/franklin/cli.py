@@ -14,6 +14,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -347,15 +348,32 @@ def _print_run_estimate(book_path: Path, *, include_cleanup: bool) -> None:
         f"[bold]${result.total_cost_low_usd:,.2f} - ${result.total_cost_usd:,.2f}[/bold]",
     )
     console.print(table)
+    _print_estimate_callout()
+
+
+_ESTIMATE_CALLOUT = (
+    "[bold]This is a budget ceiling, not a prediction.[/bold]\n"
+    "\n"
+    "Franklin intentionally over-estimates so you're never surprised by your bill. "
+    "Real runs typically cost significantly less because Anthropic's prompt caching "
+    "gives a 90% discount on input tokens that repeat across chapters (system "
+    "prompts, tool schemas, etc.), and the heuristics above assume worst-case "
+    "output lengths that rarely happen in practice.\n"
+    "\n"
+    "Your actual spend is reported after each stage completes. If your real "
+    "costs differ meaningfully from these estimates, let us know at "
+    "github.com/mcrundo/franklin/issues -- it helps us calibrate."
+)
+
+
+def _print_estimate_callout() -> None:
     console.print()
     console.print(
-        "[dim]Range: low end assumes prompt caching + realistic output lengths; "
-        "high end is the pessimistic worst case.[/dim]"
-    )
-    console.print(
-        "[dim]Method: ~1.3 tokens/word x chapter text + per-stage prompt overhead, "
-        "priced at Sonnet 4 (map/plan) and Opus 4 (reduce). Reduce artifact count "
-        "is a heuristic (base 8 + ~0.5/chapter). Ingest is free.[/dim]"
+        Panel(
+            _ESTIMATE_CALLOUT,
+            border_style="dim",
+            padding=(0, 1),
+        )
     )
 
 
@@ -2221,16 +2239,7 @@ def _render_gate_estimate(
         f"[bold]${result.total_cost_low_usd:,.2f} - ${result.total_cost_usd:,.2f}[/bold]",
     )
     console.print(table)
-    console.print(
-        "[dim]Range: low end assumes prompt caching + realistic output lengths; "
-        "high end is the pessimistic worst case. You'll almost always land inside "
-        "this band.[/dim]"
-    )
-    console.print(
-        "[dim]Method: ~1.3 tokens/word x chapter text + per-stage prompt overhead, "
-        "priced at Sonnet 4 (map/plan) and Opus 4 (reduce). Reduce artifact count "
-        "is a heuristic (base 8 + ~0.5/chapter). Ingest is free.[/dim]"
-    )
+    _print_estimate_callout()
 
 
 def _prompt_gate_action() -> str:
