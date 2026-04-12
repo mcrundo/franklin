@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-12
+
 ### Added
 
 - `bin/release` script automates the entire release flow: version bump, changelog cut, sanity gate, commit, tag, push. See `docs/releasing.md`.
@@ -92,6 +94,7 @@ First public release.
 #### License infrastructure (disabled in v0.1)
 - RS256 JWT license module (`franklin license {login, logout, whoami, status}`) with offline grace window, cached revocations, and bypass env var. Gate code is wired but disabled via `_LICENSE_GATE_ENABLED = False` so v0.1 ships fully free. The flag stays in place for a future paid tier.
 
-[Unreleased]: https://github.com/mcrundo/franklin/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mcrundo/franklin/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/mcrundo/franklin/releases/tag/v0.2.1
 [0.2.0]: https://github.com/mcrundo/franklin/releases/tag/v0.2.0
 [0.1.0]: https://github.com/mcrundo/franklin/releases/tag/v0.1.0

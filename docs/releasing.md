@@ -5,19 +5,35 @@ Releases are mostly automated. The only manual command is one shell script.
 ## TL;DR
 
 ```bash
-bin/release 0.3.0
+bin/release 0.3.0        # bump, open release PR
+# merge the PR on GitHub
+bin/release 0.3.0 --tag  # tag merge commit, trigger publish chain
 ```
 
-That's it. The script handles bump, changelog cut, sanity gate, commit, tag, and push (with a confirmation prompt). After the push, three GitHub workflows fire in sequence and produce the GitHub Release, the PyPI upload, and a Homebrew tap PR.
+Two commands, one PR merge in between. Everything downstream — GitHub Release, PyPI upload, Homebrew tap PR — fires automatically from the tag.
 
 ## What `bin/release` does
 
+### Phase 1: `bin/release X.Y.Z` (prepare)
+
 1. **Preflight.** Verifies semver format, clean working tree, you're on `main`, `main` is in sync with `origin/main`, the `[Unreleased]` CHANGELOG section has actual content, the version is different from the current one, and no `vX.Y.Z` tag exists locally or on origin.
 2. **Version bump.** Edits `version` in `pyproject.toml`, `__version__` in `src/franklin/__init__.py`, and runs `uv lock` to refresh the lockfile.
-3. **Changelog cut.** Inserts a `## [X.Y.Z] - YYYY-MM-DD` heading right below `## [Unreleased]`, leaving the existing entries to fall under the new dated header. Updates the link references at the bottom of the file (`[Unreleased]` and adds `[X.Y.Z]`).
+3. **Changelog cut.** Inserts a `## [X.Y.Z] - YYYY-MM-DD` heading right below `## [Unreleased]`, leaving the existing entries to fall under the new dated header. Updates the link references at the bottom.
 4. **Sanity gate.** Runs `ruff check`, `ruff format --check`, `mypy`, and `pytest -q`. Fails fast if any check is red.
-5. **Commit + tag.** Single `Release X.Y.Z` commit, tagged `vX.Y.Z`.
-6. **Push prompt.** Asks before pushing. Pass `--yes` to skip the prompt for scripted use, or `--dry` to do everything except commit/tag/push (useful for inspecting the diff).
+5. **Commit on release branch.** Creates `release/X.Y.Z`, commits `Release X.Y.Z`, pushes the branch, opens a PR via `gh`, then resets local main to stay in sync with origin.
+
+### Phase 2: `bin/release X.Y.Z --tag` (after PR merge)
+
+1. Pulls latest main (which now has the release commit).
+2. Verifies `pyproject.toml` version matches X.Y.Z.
+3. Tags `vX.Y.Z` on HEAD and pushes the tag.
+
+### Flags
+
+- `--dry` — do everything except commit/push (useful for inspecting the diff)
+- `--yes` — skip confirmation prompts
+- `--direct` — old behavior: push to main directly (needs admin bypass on protected branches)
+- `--tag` — phase 2: tag the merge commit after the release PR is merged
 
 ## What happens after `git push origin v0.3.0`
 
