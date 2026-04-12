@@ -8,6 +8,7 @@ ANTHROPIC_API_KEY is set.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from franklin.mapper import (
     build_tool_schema,
     build_user_prompt,
     extract_chapter,
+    extract_chapter_async,
     format_code_blocks,
 )
 from franklin.schema import (
@@ -120,6 +122,22 @@ class _FakeStream:
         return self._response
 
 
+class _FakeAsyncStream:
+    """Async counterpart of _FakeStream for testing async extract/generate."""
+
+    def __init__(self, response: Any) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeAsyncStream:
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        return None
+
+    async def get_final_message(self) -> Any:
+        return self._response
+
+
 class _FakeClient:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
@@ -133,6 +151,23 @@ class _FakeClient:
                 content=[SimpleNamespace(type="tool_use", input=self._payload)],
                 stop_reason="tool_use",
                 usage=SimpleNamespace(input_tokens=123, output_tokens=456),
+            )
+        )
+
+
+class _FakeAsyncClient:
+    """Async counterpart of _FakeClient for testing async extract/generate."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+        self.messages = self
+
+    def stream(self, **kwargs: Any) -> _FakeAsyncStream:
+        return _FakeAsyncStream(
+            SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input=self._payload)],
+                stop_reason="tool_use",
+                usage=SimpleNamespace(input_tokens=100, output_tokens=200),
             )
         )
 
@@ -168,6 +203,31 @@ def test_extract_chapter_merges_with_ingest_metadata() -> None:
 
     assert client.last_kwargs is not None
     assert client.last_kwargs["tool_choice"]["name"] == "save_chapter_extraction"
+
+
+def test_extract_chapter_async_round_trip() -> None:
+    """Async extract produces the same sidecar shape as the sync version."""
+    book = _book()
+    chapter = _chapter()
+    payload = {
+        "summary": "Async test.",
+        "concepts": [
+            {
+                "id": "ch03.concept.async",
+                "name": "Async",
+                "definition": "Concurrent extraction",
+                "importance": "high",
+                "source_location": "ch03 opening",
+            }
+        ],
+    }
+    client = _FakeAsyncClient(payload)
+    sidecar, in_toks, out_toks = asyncio.run(extract_chapter_async(book, chapter, client=client))
+    assert sidecar.chapter_id == "ch03"
+    assert sidecar.summary == "Async test."
+    assert len(sidecar.concepts) == 1
+    assert in_toks == 100
+    assert out_toks == 200
 
 
 def test_extract_chapter_rejects_invalid_payload() -> None:

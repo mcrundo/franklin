@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +15,7 @@ from franklin.reducer.generators import (
     _render_plan_tree,
     _template_name_for,
     generate_artifact,
+    generate_artifact_async,
 )
 from franklin.schema import (
     ActionableWorkflow,
@@ -161,6 +163,40 @@ class _FakeClient:
                     output_tokens=500,
                     cache_read_input_tokens=800,
                     cache_creation_input_tokens=200,
+                ),
+            )
+        )
+
+
+class _FakeAsyncStream:
+    def __init__(self, response: Any) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeAsyncStream:
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        return None
+
+    async def get_final_message(self) -> Any:
+        return self._response
+
+
+class _FakeAsyncClient:
+    def __init__(self, content: str) -> None:
+        self._content = content
+        self.messages = self
+
+    def stream(self, **kwargs: Any) -> _FakeAsyncStream:
+        return _FakeAsyncStream(
+            SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input={"content": self._content})],
+                stop_reason="tool_use",
+                usage=SimpleNamespace(
+                    input_tokens=500,
+                    output_tokens=300,
+                    cache_read_input_tokens=400,
+                    cache_creation_input_tokens=100,
                 ),
             )
         )
@@ -314,6 +350,29 @@ def test_generate_artifact_warns_on_unresolved_feeds(
 
     assert any("ch99.concepts" in r.message for r in caplog.records)
     assert any("references/missing.md" in r.message for r in caplog.records)
+
+
+def test_generate_artifact_async_round_trip() -> None:
+    """Async generate produces the same result shape as the sync version."""
+    book = _book()
+    sidecars = {"ch04": _sidecar("ch04")}
+    plan = _plan([_reference_artifact()])
+    client = _FakeAsyncClient("# Async Generated Content\n\nBody.")
+
+    result = asyncio.run(
+        generate_artifact_async(
+            _reference_artifact(),
+            plan=plan,
+            book=book,
+            sidecars=sidecars,
+            client=client,
+        )
+    )
+
+    assert result.content.startswith("# Async Generated Content")
+    assert result.input_tokens == 500
+    assert result.output_tokens == 300
+    assert result.cache_read_tokens == 400
 
 
 def test_generate_artifact_uses_system_cache() -> None:
