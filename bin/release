@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Cut a new Franklin release.
 #
-# Bumps version in pyproject.toml + __init__.py, refreshes uv.lock,
-# cuts the [Unreleased] CHANGELOG section into a dated [X.Y.Z] section,
-# runs lint/type/test as a sanity gate, commits, tags, and (after
-# confirmation) pushes both main and the new tag.
+# Default flow (branch-protection-friendly):
+#   bin/release 0.3.0          # bump, commit on release/0.3.0, open PR
+#   (merge the PR)
+#   bin/release 0.3.0 --tag    # tag the merge commit, push tag
 #
 # The tag push triggers .github/workflows/release.yml which creates the
 # GitHub Release; that fires publish.yml (PyPI) and homebrew-bump.yml
 # (tap PR) automatically. See docs/releasing.md for the full flow.
 #
-# Usage:
-#   bin/release 0.3.0          # interactive — prompts before pushing
-#   bin/release 0.3.0 --yes    # non-interactive — pushes without prompting
-#   bin/release 0.3.0 --dry    # do everything except commit, tag, push
+# Flags:
+#   --tag       Tag and push (phase 2, after PR merge)
+#   --direct    Push to main directly (skip PR, needs admin bypass)
+#   --yes       Skip confirmation prompts
+#   --dry       Do everything except commit, tag, push
 
 set -euo pipefail
 
@@ -21,22 +22,32 @@ set -euo pipefail
 
 VERSION="${1:-}"
 MODE="interactive"
+ACTION="pr"
 
 for arg in "${@:2}"; do
     case "$arg" in
         --yes|-y) MODE="yes" ;;
         --dry|-n) MODE="dry" ;;
+        --tag|-t) ACTION="tag" ;;
+        --direct) ACTION="direct" ;;
         *) echo "error: unknown flag '$arg'" >&2; exit 2 ;;
     esac
 done
 
 if [[ -z "$VERSION" ]]; then
     cat >&2 <<EOF
-usage: bin/release X.Y.Z [--yes|--dry]
+usage: bin/release X.Y.Z [--tag|--direct|--dry|--yes]
 
-  X.Y.Z   semver version (e.g. 0.3.0, 1.2.4)
-  --yes   skip the push confirmation prompt
-  --dry   bump and cut, but don't commit, tag, or push
+  X.Y.Z     semver version (e.g. 0.3.0, 1.2.4)
+  --tag     phase 2: tag the merge commit after the release PR is merged
+  --direct  push to main directly (needs admin bypass on protected branches)
+  --dry     bump and cut, but don't commit, tag, or push
+  --yes     skip confirmation prompts
+
+Default flow (works with branch protection):
+  bin/release 0.3.0          # bump, open PR
+  (merge the PR on GitHub)
+  bin/release 0.3.0 --tag    # tag merge commit, trigger publish chain
 
 See docs/releasing.md for the end-to-end release flow.
 EOF
@@ -48,10 +59,53 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 2
 fi
 
-# ---- preflight ------------------------------------------------------------
-
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
+
+# ---- phase 2: tag after merge --------------------------------------------
+
+if [[ "$ACTION" == "tag" ]]; then
+    git checkout main
+    git pull --ff-only
+
+    PYPROJECT_VERSION="$(grep '^version = ' pyproject.toml | head -1 | cut -d'"' -f2)"
+    if [[ "$PYPROJECT_VERSION" != "$VERSION" ]]; then
+        echo "error: pyproject.toml has version $PYPROJECT_VERSION, expected $VERSION" >&2
+        echo "  is the release PR merged?" >&2
+        exit 1
+    fi
+
+    if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+        echo "error: tag v$VERSION already exists locally" >&2
+        exit 1
+    fi
+    if git ls-remote --tags --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+        echo "error: tag v$VERSION already exists on origin" >&2
+        exit 1
+    fi
+
+    git tag "v$VERSION"
+
+    if [[ "$MODE" == "dry" ]]; then
+        echo "--dry: tag v$VERSION created locally but not pushed."
+        exit 0
+    fi
+
+    git push origin "v$VERSION"
+
+    cat <<EOF
+
+✓ Tagged v$VERSION on $(git rev-parse --short HEAD).
+
+What happens next (watch with \`gh run watch\`):
+  1. release.yml creates the GitHub Release from CHANGELOG notes
+  2. publish.yml builds + uploads the sdist/wheel to PyPI
+  3. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
+EOF
+    exit 0
+fi
+
+# ---- phase 1: preflight --------------------------------------------------
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
     echo "error: working tree is dirty — commit or stash first" >&2
@@ -88,8 +142,6 @@ if git ls-remote --tags --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1
     exit 1
 fi
 
-# Verify [Unreleased] section has actual content (not just whitespace).
-# Strips the heading and reads up to the next "## [" line.
 UNRELEASED_BODY="$(
     awk '
         /^## \[Unreleased\]/ { in_section = 1; next }
@@ -109,14 +161,12 @@ echo
 echo "  current version: $CURRENT_VERSION"
 echo "  new version:     $VERSION"
 echo "  date:            $DATE"
-echo "  mode:            $MODE"
+echo "  mode:            $MODE ($ACTION)"
 echo
 
 # ---- bump version ---------------------------------------------------------
 
-# pyproject.toml
 sed_inplace() {
-    # GNU vs BSD sed compat: BSD wants `-i ''`, GNU wants `-i`.
     if sed --version >/dev/null 2>&1; then
         sed -i "$@"
     else
@@ -136,7 +186,6 @@ if ! grep -q "^__version__ = \"$VERSION\"$" src/franklin/__init__.py; then
     exit 1
 fi
 
-# uv.lock
 uv lock --quiet
 
 # ---- cut CHANGELOG --------------------------------------------------------
@@ -154,15 +203,12 @@ if "## [Unreleased]" not in text:
     print("error: CHANGELOG.md missing [Unreleased] heading", file=sys.stderr)
     sys.exit(1)
 
-# Insert a new dated section header right after the existing [Unreleased]
-# heading. The existing entries naturally fall under the new dated header.
 text = text.replace(
     "## [Unreleased]\n",
     f"## [Unreleased]\n\n## [{version}] - {date}\n",
     1,
 )
 
-# Update / add link references at the bottom.
 unreleased_link_re = re.compile(
     r"\[Unreleased\]: https://github\.com/mcrundo/franklin/compare/v[0-9.]+\.\.\.HEAD"
 )
@@ -172,7 +218,6 @@ if not unreleased_link_re.search(text):
     sys.exit(1)
 text = unreleased_link_re.sub(new_unreleased, text)
 
-# Add the version-specific link right below the Unreleased link if not present.
 new_version_link = f"[{version}]: https://github.com/mcrundo/franklin/releases/tag/v{version}"
 if new_version_link not in text:
     text = text.replace(
@@ -195,43 +240,43 @@ uv run pytest -q >/dev/null
 echo "✓ sanity gate passed"
 echo
 
-# ---- commit + tag ---------------------------------------------------------
+# ---- commit ---------------------------------------------------------------
 
 if [[ "$MODE" == "dry" ]]; then
-    echo "--dry: skipping commit, tag, and push. Inspect changes with \`git diff\`."
+    echo "--dry: skipping commit and push. Inspect changes with \`git diff\`."
     exit 0
 fi
 
 git add pyproject.toml src/franklin/__init__.py uv.lock CHANGELOG.md
 git commit -m "Release $VERSION"
-git tag "v$VERSION"
 
-echo "✓ committed and tagged v$VERSION"
+echo "✓ committed Release $VERSION"
 echo
 
-if [[ "$MODE" == "interactive" ]]; then
-    read -r -p "Push main + v$VERSION to origin now? [y/N] " confirm
-    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-        cat <<EOF
+# ---- push (branch or direct) ---------------------------------------------
 
-Skipping push. To release later, run:
+if [[ "$ACTION" == "direct" ]]; then
+    git tag "v$VERSION"
 
-    git push origin main
-    git push origin v$VERSION
+    if [[ "$MODE" == "interactive" ]]; then
+        read -r -p "Push main + v$VERSION to origin now? [y/N] " confirm
+        if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+            cat <<EOF
+
+Skipping push. To release later:
+    git push origin main && git push origin v$VERSION
 
 To undo:
-
-    git tag -d v$VERSION
-    git reset --hard HEAD~1
+    git tag -d v$VERSION && git reset --hard HEAD~1
 EOF
-        exit 0
+            exit 0
+        fi
     fi
-fi
 
-git push origin main
-git push origin "v$VERSION"
+    git push origin main
+    git push origin "v$VERSION"
 
-cat <<EOF
+    cat <<EOF
 
 ✓ Released v$VERSION.
 
@@ -240,3 +285,36 @@ What happens next (watch with \`gh run watch\`):
   2. publish.yml builds + uploads the sdist/wheel to PyPI
   3. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
 EOF
+
+else
+    # Default: create a release branch and open a PR.
+    BRANCH="release/$VERSION"
+    git checkout -b "$BRANCH"
+    git push -u origin "$BRANCH"
+
+    if command -v gh >/dev/null 2>&1; then
+        gh pr create \
+            --title "Release $VERSION" \
+            --body "Version bump, changelog cut, lockfile refresh. Generated by \`bin/release $VERSION\`.
+
+After merge, run:
+\`\`\`
+bin/release $VERSION --tag
+\`\`\`"
+        echo
+    fi
+
+    # Return to main and clean up the local release commit so main
+    # stays in sync with origin/main.
+    git checkout main
+    git reset --hard origin/main
+
+    cat <<EOF
+
+✓ Release PR opened for v$VERSION.
+
+Next steps:
+  1. Merge the PR on GitHub
+  2. bin/release $VERSION --tag
+EOF
+fi
