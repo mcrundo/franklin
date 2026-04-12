@@ -236,6 +236,7 @@ def _print_next_steps(
         console.print()
 
     console.print("  [bold]Iterate on the output:[/bold]")
+    console.print(f"     [cyan]franklin fix {run_dir}[/cyan]  — regenerate low-grade artifacts")
     console.print(f"     [cyan]franklin grade {run_dir}[/cyan]  — detailed grade card")
     console.print(f"     [cyan]franklin review {run_dir}[/cyan]  — prune artifacts you don't want")
     console.print(
@@ -1536,6 +1537,143 @@ def _print_detailed_grade_report(grade: RunGrade, *, plan_name: str) -> None:
         console.print(f"[red]Failed stages:[/red] {', '.join(grade.failed_stages)}")
 
 
+_FIX_SCORE_THRESHOLD = 0.83  # below B
+
+
+@app.command(name="fix")
+def fix_command(
+    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, help="Run directory to fix"),
+    model: str = typer.Option(
+        REDUCER_DEFAULT_MODEL, "--model", help="Anthropic model ID for regeneration"
+    ),
+    threshold: float = typer.Option(
+        _FIX_SCORE_THRESHOLD,
+        "--threshold",
+        help="Score threshold — artifacts below this are candidates (0.0-1.0)",
+    ),
+) -> None:
+    """Interactively fix low-grade artifacts.
+
+    Grades the run, shows artifacts below the threshold, lets you pick
+    which ones to regenerate, re-runs reduce on those, re-assembles,
+    and shows the new grade. Loops until you're satisfied or everything
+    is above the threshold.
+    """
+    import sys
+
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir}")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    book = run.load_book()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(f"[red]error:[/red] no plugin at {plugin_root} — run assemble first")
+        raise typer.Exit(code=1)
+
+    sidecar_ids = [p.stem for p in sorted(run.chapters_dir.glob("*.json"))]
+    sidecars = {cid: run.load_sidecar(cid) for cid in sidecar_ids}
+    artifact_by_id = {a.id: a for a in plan.artifacts}
+
+    while True:
+        grade = grade_run(run_dir)
+        weak = [g for g in grade.artifact_grades if g.score < threshold]
+        if not weak:
+            console.print(
+                f"[green]✓[/green] All artifacts score [bold]{threshold:.2f}+[/bold] "
+                f"(grade: {grade.letter}). Nothing to fix."
+            )
+            break
+
+        console.print()
+        console.rule("[bold]Artifacts below threshold[/bold]")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("Artifact", style="cyan")
+        table.add_column("Grade", justify="center")
+        table.add_column("Score", justify="right")
+        table.add_column("Missed checks")
+        for idx, g in enumerate(weak, start=1):
+            table.add_row(
+                str(idx),
+                g.path,
+                g.letter,
+                f"{g.score:.2f}",
+                ", ".join(g.failed_checks[:3]),
+            )
+        console.print(table)
+        console.print(
+            f"  [dim]{len(weak)} artifact(s) below {threshold:.2f} "
+            f"(run grade: {grade.letter} / {grade.composite_score:.2f})[/dim]"
+        )
+        console.print()
+
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            console.print("[dim]non-interactive — regenerating all[/dim]")
+            to_fix = weak
+        else:
+            import questionary
+
+            action = questionary.select(
+                "What would you like to do?",
+                choices=[
+                    questionary.Choice(f"Regenerate all {len(weak)}", value="all"),
+                    questionary.Choice("Pick which ones to regenerate", value="pick"),
+                    questionary.Choice("Done — accept current grades", value="done"),
+                ],
+            ).ask()
+
+            if action is None or action == "done":
+                break
+            if action == "all":
+                to_fix = weak
+            else:
+                picks = questionary.checkbox(
+                    "Select artifacts to regenerate (space to toggle, enter to confirm)",
+                    choices=[
+                        questionary.Choice(
+                            f"{g.path} ({g.letter})",
+                            value=g,
+                            checked=True,
+                        )
+                        for g in weak
+                    ],
+                ).ask()
+                if not picks:
+                    continue
+                to_fix = picks
+
+        # Regenerate selected artifacts
+        targets = []
+        for g in to_fix:
+            art = artifact_by_id.get(g.artifact_id)
+            if art:
+                targets.append(art)
+
+        if not targets:
+            console.print("[yellow]no matching artifacts found in plan[/yellow]")
+            break
+
+        console.print()
+        _generate_artifacts(
+            run,
+            plan=plan,
+            book=book,
+            sidecars=sidecars,
+            targets=targets,
+            model=model,
+            force=True,
+        )
+
+        # Re-assemble to get fresh grade
+        console.print()
+        assemble_pipeline(run_dir=run_dir, zip_archive=False)
+
+    console.print()
+
+
 @app.command(name="inspect")
 def inspect_command(
     run_dir: Path = typer.Argument(
@@ -1941,6 +2079,23 @@ def push_command(
     console.print(f"  pushed branch [cyan]{result.branch}[/cyan] via [dim]{result.backend}[/dim]")
     if result.pr_url:
         console.print(f"  [green]✓[/green] pull request: {result.pr_url}")
+
+    # Patch the README's install section with the real repo name.
+    readme_path = plugin_root / "README.md"
+    if readme_path.exists():
+        readme_text = readme_path.read_text()
+        if "claude plugin add owner/repo" in readme_text:
+            readme_text = readme_text.replace(
+                "claude plugin add owner/repo", f"claude plugin add {repo}"
+            )
+            # Remove the placeholder note too.
+            readme_text = readme_text.replace(
+                "\n*Replace `owner/repo` with the GitHub repository "
+                "after publishing with `franklin push`.*\n",
+                "\n",
+            )
+            readme_path.write_text(readme_text)
+            console.print(f"  [green]✓[/green] updated README.md install section with {repo}")
 
 
 _VALID_INSTALL_SCOPES: tuple[str, ...] = ("user", "project", "local")
