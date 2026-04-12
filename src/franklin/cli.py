@@ -32,6 +32,7 @@ from franklin.assembler import (
     FrontmatterIssue,
     TemplateLeak,
     find_template_leaks,
+    generate_readme,
     package_plugin,
     validate_frontmatter,
     validate_links,
@@ -1165,6 +1166,10 @@ def assemble_pipeline(
 
     manifest_path = write_plugin_manifest(plugin_root, plan.plugin)
     console.print(f"[green]✓[/green] wrote {manifest_path.relative_to(plugin_root)}")
+
+    book_manifest = run.load_book()
+    readme_path = generate_readme(plugin_root, plan=plan, book=book_manifest)
+    console.print(f"[green]✓[/green] wrote {readme_path.relative_to(plugin_root)}")
 
     files = sorted(p for p in plugin_root.rglob("*") if p.is_file())
     markdown_files = [p for p in files if p.suffix == ".md"]

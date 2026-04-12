@@ -10,6 +10,7 @@ from franklin.assembler.frontmatter import FrontmatterIssue, validate_frontmatte
 from franklin.assembler.links import BrokenLink, validate_links
 from franklin.assembler.manifest import write_plugin_manifest
 from franklin.assembler.packager import package_plugin
+from franklin.assembler.readme import generate_readme
 from franklin.assembler.templates import TemplateLeak, find_template_leaks
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "FrontmatterIssue",
     "TemplateLeak",
     "find_template_leaks",
+    "generate_readme",
     "package_plugin",
     "validate_frontmatter",
     "validate_links",
