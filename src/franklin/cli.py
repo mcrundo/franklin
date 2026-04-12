@@ -1077,9 +1077,7 @@ def _generate_artifacts(
 
         async def one(artifact: Artifact) -> None:
             async with sem:
-                progress.update(
-                    task_id, last=f"-> {artifact.type.value}:{artifact.id}"
-                )
+                progress.update(task_id, last=f"-> {artifact.type.value}:{artifact.id}")
                 try:
                     result = await generate_artifact_async(
                         artifact,
@@ -1101,9 +1099,7 @@ def _generate_artifacts(
                 out_path = output_root / artifact.path
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(
-                    result.content
-                    if result.content.endswith("\n")
-                    else result.content + "\n"
+                    result.content if result.content.endswith("\n") else result.content + "\n"
                 )
 
                 totals["input"] += result.input_tokens

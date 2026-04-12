@@ -115,28 +115,25 @@ uv run franklin push <run-dir> --repo owner/name
 claude plugin install owner/name
 ```
 
-v0.1 ships fully free: every command above is available without a license, and you don't need to run `franklin license login` before `franklin push` or `franklin install`. The license module stays in place for a future paid tier; `franklin license status` continues to work if you want to inspect state, but no command calls it as a gate today.
-
 ## Advisor strategy (Opus advises, Sonnet executes)
 
-Franklin uses the [advisor pattern](https://algoinsights.medium.com/the-advisor-strategy-how-to-get-claude-opus-intelligence-without-opus-prices-bfd17bbed96b) to get Opus-quality output at roughly Sonnet prices: a single expensive Opus call produces a high-leverage *plan*, and many cheap Sonnet calls *execute* that plan one artifact at a time.
+Franklin uses the [advisor pattern](https://algoinsights.medium.com/the-advisor-strategy-how-to-get-claude-opus-intelligence-without-opus-prices-bfd17bbed96b) to get Opus-quality output at roughly Sonnet prices: one Opus call produces a high-leverage *plan*, and many cheap Sonnet calls *execute* it.
 
-Concretely:
+- **`plan` (Opus)** runs once and outputs `plan.json` — the full plugin architecture, artifact list, and per-file `feeds_from` wiring. This is the advisory call; it thinks holistically about the book and the plugin shape.
+- **`reduce` (Sonnet)** runs N times — once per artifact — and generates each file from the brief Opus wrote. Sonnet never has to reason about the architecture; it just fills in a well-scoped plan.
+- **`map` and `cleanup`** also use Sonnet — they're per-chapter executions of a well-defined extraction prompt, not architectural decisions.
 
-- **`plan` (Opus)** runs once per run and outputs `plan.json` — the full plugin architecture, artifact list, and per-file `feeds_from` wiring. This is the advisory call; it thinks holistically about the book and the plugin shape.
-- **`reduce` (Sonnet)** runs N times — once per artifact — and generates each file using the brief Opus wrote. Sonnet never has to reason about the architecture; it just fills in a well-scoped plan.
+The result: a typical 30-artifact book costs **$3–5 in API spend** (one Opus plan call + ~30 Sonnet calls), with most of the savings coming from Anthropic's prompt caching (90% discount on repeated input tokens across chapters). `franklin run --estimate` shows a pessimistic budget ceiling before any paid calls — real costs are typically well below it.
 
-For a typical 28-artifact run that translates to **1× Opus + 28× Sonnet** instead of **29× Opus**. In dollar terms that's roughly `$0.30 + 28 × $0.20 ≈ $5.90` vs `29 × $1.00 ≈ $29.00` — the same output quality for about 20% of the cost. `map` and `cleanup` similarly use Sonnet since they're per-chapter executions of a well-defined extraction prompt, not architectural decisions.
-
-The tradeoff is that Opus's advisory call is a single point of failure: if the plan is wrong, all 28 reduces inherit the mistake. `franklin review <run-dir>` pauses between plan and reduce so you can prune or redirect the plan before paying for execution — that's the human-in-the-loop half of the pattern.
+The tradeoff is that Opus's advisory call is a single point of failure: if the plan is wrong, every reduce inherits the mistake. `franklin review <run-dir>` pauses between plan and reduce so you can prune or redirect the plan before paying for execution.
 
 ## Cost and performance
 
-- **`franklin run --estimate`** predicts per-stage token counts and dollar cost from a parsed `BookManifest` before any paid calls. Displayed as a `$low - $high` range: the high end is the pessimistic worst case (`~1.3 tokens/word x chapter text + per-stage overhead`), the low end discounts for prompt caching and realistic output lengths. Real runs almost always land inside the band.
-- **`franklin pick` shows the same estimate** as a pre-map gate so you can deselect expensive chapters before paying for them — see "happy path" above.
-- **Tier 4 cleanup** uses `AsyncAnthropic` with a bounded semaphore (`--clean-concurrency=8` default). A 29-chapter book drops from ~50 minutes sequential to ~6 minutes.
-- **Resume-on-disk** means a flaky network or a burned credit card never costs you more than the stage that was in flight. Re-run the same command; Franklin picks up from `book.json`, `chapters/`, `plan.json`, or `output/` depending on what already exists.
-- **Per-chapter failures are non-fatal** during cleanup and map; the original Tier 2 output is kept and reported in the summary.
+- **`franklin run --estimate`** predicts per-stage token counts and dollar cost before any paid calls. Displayed as a `$low - $high` range — a budget ceiling, not a prediction. Real costs are typically 30–50% below the high end thanks to prompt caching.
+- **`franklin pick` shows the same estimate** as a pre-map gate so you can deselect chapters before paying for them.
+- **Concurrent stages.** Map, reduce, and cleanup all run concurrently via `AsyncAnthropic` with bounded semaphores. A 26-chapter PDF goes from ingest to assembled plugin in ~20 minutes.
+- **Resume-on-disk** means a flaky network or a burned credit card never costs you more than the calls that were in flight. Re-run the same command; Franklin picks up from `book.json`, `chapters/`, `plan.json`, or `output/` depending on what already exists.
+- **Per-chapter failures are non-fatal** during cleanup and map; the original output is kept and reported in the summary.
 - **LLM drift is tolerated**, not fatal. If a tool-use response slips a stray field onto a sub-object, the validator strips it and logs a warning instead of killing the whole stage. Missing required fields and type errors still raise.
 
 ## Run directory layout
