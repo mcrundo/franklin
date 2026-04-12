@@ -2,7 +2,7 @@
 
 Franklin is distributed via a personal Homebrew tap rather than homebrew-core. Homebrew-core requires ~75 stars and demonstrated "notability" before they'll accept a new formula, so a fresh project gets its own tap first and can graduate later.
 
-End-user install, once everything below is set up:
+End-user install:
 
 ```bash
 brew tap mcrundo/franklin
@@ -13,116 +13,31 @@ That drops a `franklin` command onto PATH, same as `pipx install franklin-book` 
 
 ---
 
-## One-time tap setup
+## How the formula works
 
-These steps are done **once**, after `franklin-book` is live on PyPI. They depend on a published PyPI release existing because Homebrew hashes the sdist tarball.
+The formula at `mcrundo/homebrew-franklin` uses a pip-based install rather than brew's `virtualenv_install_with_resources`. It creates a Python venv, `pip install franklin-book==VERSION` with pre-built wheels from PyPI, and symlinks the `franklin` binary into brew's bin.
 
-### 1. Create the tap repository on GitHub
+This approach was chosen because `virtualenv_install_with_resources` forces `--no-binary :all:` (source builds for every dep), which collides with brew's sandboxed build environment for packages with heavy native extensions (cryptography needs Rust + maturin, pillow needs libjpeg + cmake, lxml needs libxml2). The pip-based install uses binary wheels and completes in ~10 seconds.
 
-Create an empty public repo at `https://github.com/mcrundo/homebrew-franklin`. The `homebrew-` prefix is mandatory — that's how `brew tap mcrundo/franklin` resolves the repo name.
-
-No README required. Homebrew will just look for `Formula/*.rb` files.
-
-### 2. Clone the tap and scaffold
-
-```bash
-git clone git@github.com:mcrundo/homebrew-franklin.git
-cd homebrew-franklin
-mkdir -p Formula
-```
-
-### 3. Generate the formula skeleton
-
-Use `brew create --python` against the PyPI sdist URL. Homebrew will download the tarball, compute the sha256, and open an editor with a skeleton:
-
-```bash
-brew create --python --tap=mcrundo/homebrew-franklin \
-    https://files.pythonhosted.org/packages/source/f/franklin-book/franklin_book-0.1.0.tar.gz
-```
-
-In the editor, fill in:
-
-```ruby
-class FranklinBook < Formula
-  include Language::Python::Virtualenv
-
-  desc "Turn technical books into Claude Code plugins (Opus advises, Sonnet executes)"
-  homepage "https://github.com/mcrundo/franklin"
-  url "https://files.pythonhosted.org/packages/source/f/franklin-book/franklin_book-0.1.0.tar.gz"
-  sha256 "<filled by brew create>"
-  license "MIT"
-
-  depends_on "python@3.12"
-
-  # resource blocks get filled in by `brew update-python-resources`
-  # (leave this section empty for now)
-
-  def install
-    virtualenv_install_with_resources
-  end
-
-  test do
-    # Smoke test: the binary runs and reports its version
-    assert_match "franklin", shell_output("#{bin}/franklin --help")
-    # Doctor should exit 0 with --skip-network on a clean box
-    system bin/"franklin", "doctor", "--skip-network"
-  end
-end
-```
-
-### 4. Populate the transitive dependency graph
-
-```bash
-brew update-python-resources Formula/franklin-book.rb
-```
-
-This walks Franklin's declared deps (anthropic, ebooklib, pdfplumber, rich, typer, pydantic, pyjwt, pyyaml, keyring, beautifulsoup4, lxml, tenacity) plus their transitive closure, and writes a `resource "name" do ... end` block for each one. Expect somewhere between 30 and 60 resource blocks.
-
-### 5. Test the formula locally
-
-```bash
-# Make sure the tap is loaded
-brew tap mcrundo/franklin "$(pwd)"
-
-# Install from source — this exercises the resource graph
-brew install --build-from-source franklin-book
-
-# Run the test block
-brew test franklin-book
-
-# Audit against Homebrew's style rules
-brew audit --strict --new-formula franklin-book
-```
-
-Any `brew audit` warnings are worth fixing before committing — they're the same checks homebrew-core would eventually run if we submit for promotion.
-
-### 6. Commit and push
-
-```bash
-git add Formula/franklin-book.rb
-git commit -m "franklin-book 0.1.0"
-git push
-```
-
-Users can now run:
-
-```bash
-brew tap mcrundo/franklin
-brew install franklin-book
-```
+The tradeoff: homebrew-core would not accept this formula as-is (they require source builds via `virtualenv_install_with_resources`). That's fine — we're in a personal tap and can migrate if/when the project meets homebrew-core's notability requirements.
 
 ---
 
 ## Bumping the formula on future releases
 
-**This is now automated.** When `bin/release` cuts a new version and pushes the tag, `.github/workflows/homebrew-bump.yml` waits for PyPI to publish the sdist, fetches the new URL + sha256, patches `Formula/franklin-book.rb` in this tap repo, and opens a PR for review. See `docs/releasing.md` for the full release flow.
+**This is automated.** When `bin/release` cuts a new version and pushes the tag, `.github/workflows/homebrew-bump.yml` waits for PyPI to publish the sdist, fetches the new URL + sha256, patches `Formula/franklin-book.rb` in the tap repo, and opens a PR for review. See `docs/releasing.md` for the full release flow.
 
-The auto-PR description includes a checklist for the manual review step:
+The auto-PR patches the `url` and `sha256` lines. The `pip install franklin-book==#{version}` line picks up the version from the URL automatically (brew derives `#{version}` from the sdist filename).
 
-1. **If dependencies changed**, run `brew update-python-resources Formula/franklin-book.rb` locally to refresh the resource graph. The workflow can't do this on its Linux runner — it needs Homebrew installed.
-2. `brew install --build-from-source franklin-book` to smoke-test.
-3. `brew test franklin-book` and `brew audit --strict --new-formula franklin-book`.
-4. Merge the PR.
+### Manual review checklist
+
+The auto-PR is intentionally not auto-merged. Before merging:
+
+1. `brew install franklin-book` to smoke-test.
+2. `brew test franklin-book` to verify the test block passes.
+3. Merge the PR.
+
+Since the formula uses pip with wheels (not source builds), dependency graph changes don't require any manual intervention — pip resolves them automatically.
 
 ### Required secret
 
@@ -130,7 +45,7 @@ The auto-bump workflow needs a `HOMEBREW_TAP_TOKEN` secret in the franklin repo:
 
 ### Manual fallback
 
-If the workflow doesn't fire or fails for some reason, the helper script `bin/bump-homebrew` (in the main franklin repo) prints the new URL + sha256 for any PyPI release so you can patch the formula by hand:
+If the workflow doesn't fire or fails, the helper script `bin/bump-homebrew` prints the new URL + sha256 for any PyPI release:
 
 ```bash
 bin/bump-homebrew              # latest PyPI release
@@ -149,4 +64,4 @@ homebrew-core's [acceptable formulae policy](https://docs.brew.sh/Acceptable-For
 - **Stable releases**: a tagged version, not HEAD-only
 - **Maintained**: commits in the last ~year
 
-Franklin will meet these eventually. Until then, a personal tap is the clean, officially-blessed path and behaves identically from the user's point of view. The migration to homebrew-core later is just `brew bump-formula-pr` against `homebrew/homebrew-core`.
+Franklin will meet these eventually. Until then, a personal tap is the clean, officially-blessed path and behaves identically from the user's point of view. The migration to homebrew-core later is just `brew bump-formula-pr` against `homebrew/homebrew-core` — but would require switching the formula to `virtualenv_install_with_resources` at that point.

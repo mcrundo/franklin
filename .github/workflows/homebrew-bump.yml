@@ -3,14 +3,11 @@ name: Bump Homebrew tap
 # Auto-bumps Formula/franklin-book.rb in mcrundo/homebrew-franklin
 # whenever a new GitHub Release is published. Waits for PyPI to settle
 # (publish.yml runs in parallel), grabs the new sdist URL + sha256,
-# patches the formula, and opens a PR on the tap repo for manual review
-# and merge.
+# patches the formula, and opens a PR on the tap repo for review.
 #
-# Manual review is intentional: if the new version added or removed
-# Python dependencies, you'll want to re-run `brew update-python-resources`
-# locally before merging the tap PR. The workflow can't do that — it
-# needs Homebrew installed and a macOS runner — so we leave it as a
-# checklist item in the tap PR description.
+# The formula uses pip with pre-built wheels (not source builds), so
+# dependency changes are resolved automatically. Just smoke-test
+# before merging the tap PR.
 #
 # Required secret: HOMEBREW_TAP_TOKEN
 #   Fine-grained PAT scoped to mcrundo/homebrew-franklin with:
@@ -147,10 +144,8 @@ jobs:
 
           ## Verify before merging
 
-          - [ ] If franklin-book added or removed Python dependencies in this version, run \`brew update-python-resources Formula/franklin-book.rb\` locally to refresh the resource graph. The workflow can't do this — it needs Homebrew installed.
-          - [ ] \`brew install --build-from-source franklin-book\` to smoke-test.
+          - [ ] \`brew install franklin-book\` to smoke-test
           - [ ] \`brew test franklin-book\`
-          - [ ] \`brew audit --strict --new-formula franklin-book\`
           EOF
           )"
           else
