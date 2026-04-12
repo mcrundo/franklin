@@ -229,10 +229,8 @@ def _print_next_steps(
         console.print("     [dim](--scope user persists it; --scope local is per-session)[/dim]")
         console.print()
         console.print("  [bold]2.[/bold] When you're happy, publish to GitHub:")
-        console.print(f"     [cyan]franklin push {run_dir} --repo owner/name[/cyan]")
-        console.print(
-            "     [dim](add --pr to open a pull request, --public to make the repo public)[/dim]"
-        )
+        console.print(f"     [cyan]franklin publish {run_dir}[/cyan]")
+        console.print("     [dim](interactive: picks repo name, owner, visibility for you)[/dim]")
         console.print()
 
     console.print("  [bold]Iterate on the output:[/bold]")
@@ -2144,6 +2142,149 @@ def push_command(
             )
             readme_path.write_text(readme_text)
             console.print(f"  [green]✓[/green] updated README.md install section with {repo}")
+
+
+@app.command(name="publish")
+def publish_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory with an assembled plugin"
+    ),
+) -> None:
+    """Interactively publish a plugin to GitHub.
+
+    Guides you through grade review, repo naming, owner selection, and
+    visibility — then pushes and prints the install command. Designed
+    to be the last step after ``franklin run`` or ``franklin fix``.
+    """
+    import subprocess
+
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir}")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(f"[red]error:[/red] no plugin at {plugin_root} — run assemble first")
+        raise typer.Exit(code=1)
+
+    # ---- grade check + auto-fix ----------------------------------------
+
+    grade = grade_run(run_dir)
+    _print_grade_card(grade, plan_name=plan.plugin.name)
+    console.print()
+
+    weak = [g for g in grade.artifact_grades if g.score < _FIX_SCORE_THRESHOLD]
+    if weak:
+        import questionary
+
+        fix_action = questionary.select(
+            f"{len(weak)} artifact(s) scored below B. Fix before publishing?",
+            choices=[
+                questionary.Choice(f"Fix all {len(weak)} now", value="fix"),
+                questionary.Choice("Publish anyway", value="skip"),
+                questionary.Choice("Cancel", value="cancel"),
+            ],
+        ).ask()
+
+        if fix_action is None or fix_action == "cancel":
+            console.print("[dim]cancelled[/dim]")
+            return
+
+        if fix_action == "fix":
+            # Run the fix loop
+            fix_command(run_dir=run_dir)
+            # Re-grade after fix
+            grade = grade_run(run_dir)
+
+    # ---- resolve GitHub user + orgs ------------------------------------
+
+    try:
+        gh_user = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        console.print("[red]error:[/red] could not resolve GitHub user — is `gh` authenticated?")
+        raise typer.Exit(code=1) from exc
+
+    owners = [gh_user]
+    try:
+        orgs_output = subprocess.run(
+            ["gh", "api", "user/orgs", "--jq", ".[].login"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if orgs_output:
+            owners.extend(orgs_output.splitlines())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass  # no orgs, that's fine
+
+    # ---- interactive prompts -------------------------------------------
+
+    import questionary
+
+    default_name = plan.plugin.name
+    repo_name = questionary.text(
+        "Repository name",
+        default=default_name,
+    ).ask()
+    if not repo_name:
+        console.print("[dim]cancelled[/dim]")
+        return
+
+    if len(owners) == 1:
+        owner = owners[0]
+    else:
+        owner = questionary.select(
+            "Where should we publish?",
+            choices=[questionary.Choice(o, value=o) for o in owners]
+            + [questionary.Choice("Cancel", value=None)],
+        ).ask()
+        if owner is None:
+            console.print("[dim]cancelled[/dim]")
+            return
+
+    visibility = questionary.select(
+        "Visibility",
+        choices=[
+            questionary.Choice("Public (anyone can install)", value="public"),
+            questionary.Choice("Private", value="private"),
+        ],
+    ).ask()
+    if visibility is None:
+        console.print("[dim]cancelled[/dim]")
+        return
+
+    repo = f"{owner}/{repo_name}"
+    is_public = visibility == "public"
+
+    vis_label = "public" if is_public else "private"
+    console.print()
+    console.print(f"  [bold]Publishing to:[/bold] [cyan]{repo}[/cyan] ({vis_label})")
+    console.print(f"  [bold]Grade:[/bold] {grade.letter} ({grade.composite_score:.2f})")
+    console.print()
+
+    # ---- push ----------------------------------------------------------
+
+    push_command(
+        run_dir=run_dir,
+        repo=repo,
+        branch="main",
+        create_pr=False,
+        public=is_public,
+    )
+
+    console.print()
+    console.rule("[bold green]Published[/bold green]")
+    console.print()
+    console.print("  Install with:")
+    console.print(f"    [cyan]claude plugin add {repo}[/cyan]")
+    console.print()
 
 
 _VALID_INSTALL_SCOPES: tuple[str, ...] = ("user", "project", "local")
