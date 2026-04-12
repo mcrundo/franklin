@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `franklin fix <run-dir>` command for interactive re-grading: grades the run, shows artifacts below threshold, offers Regenerate all / Pick / Done, re-runs reduce on selected artifacts, re-assembles, loops until satisfied.
+- `franklin costs` command shows actual API spend across all runs with per-run table and per-stage breakdown. Supports `--json`.
+- Cost tracking: each paid stage (cleanup, map, plan, reduce) now appends token counts and USD cost to `costs.json` in the run directory. Persists across resumes.
+- Gate 2: post-map summary before the Opus plan call. Shows per-chapter extraction counts, cross-chapter concepts, top anti-patterns, and estimated plan+reduce cost. Proceed / Cancel prompt.
+- `franklin assemble` generates a GitHub-ready `README.md` in the plugin root with install section, commands table, agents list, and reference index.
+- `franklin push` now patches the README install section with the real `owner/repo` after a successful push.
+- Async test coverage for `extract_chapter_async` and `generate_artifact_async`.
+
+### Changed
+
+- Reference prompt requires narrative evolution (show code progressing through stages, not just before/after).
+- Agent prompt requires structured `| Check | Signal | Severity |` checklist and severity-weighted output with "Fix these first" section for reviewer agents.
+- Command briefs must start with action verbs and frontmatter descriptions capped at 80 characters.
+- SKILL.md prompt requires anti-pattern quick reference table and "Where does this code go?" routing table when book data supports them.
+- Planner reference count guidance tightened from "15 beat 40" to "aim for 10-15".
+- `bin/release --tag` now creates the GitHub Release from the CLI, bypassing the GITHUB_TOKEN limitation.
+
+### Removed
+
+- `.github/workflows/release.yml` — redundant now that `bin/release --tag` creates the GitHub Release directly.
+
 ## [0.2.1] - 2026-04-12
 
 ### Added
