@@ -84,7 +84,7 @@ Every stage can be run on its own, reads from disk, and writes to disk — so yo
 2. **map** (`franklin map <run-dir>`) — per-chapter structured extraction. One LLM call per chapter produces a sidecar with concepts, rules, anti-patterns, and workflows.
 3. **plan** (`franklin plan <run-dir>`) — design the plugin architecture from the distilled sidecars (one call).
 4. **reduce** (`franklin reduce <run-dir>`) — generate each artifact file from the plan. This is the most expensive stage.
-5. **assemble** (`franklin assemble <run-dir>`) — write `plugin.json`, run link/frontmatter/template validators, and compute the grade card.
+5. **assemble** (`franklin assemble <run-dir>`) — write `plugin.json` and `README.md`, run link/frontmatter/template validators, and compute the grade card. The generated README is GitHub-ready with install instructions, commands table, and reference index.
 
 ## Iteration tools
 
