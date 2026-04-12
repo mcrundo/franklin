@@ -1792,9 +1792,16 @@ def run_pipeline(
         ),
         ("assemble", lambda: assemble_pipeline(run_dir=run.root, zip_archive=False)),
     ]
+    # Gate 2: post-map summary before the Opus plan call. Always inserted
+    # unless --yes auto-confirms (scripted use) or --force (rebuilding).
+    if not (yes and force):
+        stages.insert(
+            2,  # after map, before plan
+            ("gate-2", lambda: _run_gate_two(run.root)),
+        )
     if review:
         stages.insert(
-            3,  # after plan, before reduce
+            4 if not (yes and force) else 3,  # after plan, before reduce
             ("review", lambda: review_command(run_dir=run.root)),
         )
     if push:
@@ -1828,6 +1835,14 @@ def run_pipeline(
         if name == "ingest" and run.book_json.exists() and not force:
             console.rule(f"[dim]skip {name} — book.json exists (use --force to regenerate)[/dim]")
             console.print()
+            continue
+        # Gate 2 is a pre-plan checkpoint — skip if plan already exists
+        # (resume case), and don't print the bold stage header since
+        # the gate renders its own.
+        if name == "gate-2" and run.plan_json.exists() and not force:
+            continue
+        if name == "gate-2":
+            fn()
             continue
 
         console.rule(f"[bold cyan]{name}[/bold cyan]")
@@ -2179,6 +2194,127 @@ def pick_command(
         create_pr=False,
         public=False,
     )
+
+
+def _run_gate_two(run_dir: Path) -> None:
+    """Post-map, pre-plan gate: show what the map extracted before the Opus call.
+
+    Loads all sidecars, prints per-chapter extraction counts, surfaces
+    cross-chapter patterns (concepts appearing in 2+ chapters), and shows
+    the estimated plan + reduce cost. Prompts the user to proceed or cancel.
+    Non-TTY invocations auto-proceed.
+    """
+    import sys
+    from collections import Counter
+
+    run = RunDirectory(run_dir)
+    if not run.book_json.exists():
+        return  # nothing to gate
+
+    sidecar_ids = [p.stem for p in sorted(run.chapters_dir.glob("*.json"))]
+    if not sidecar_ids:
+        return  # map hasn't run
+
+    sidecars = [run.load_sidecar(cid) for cid in sidecar_ids]
+
+    console.print()
+    console.rule("[bold]Map summary — review before plan[/bold]")
+
+    # Per-chapter extraction counts
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Chapter", style="cyan")
+    table.add_column("Concepts", justify="right")
+    table.add_column("Principles", justify="right")
+    table.add_column("Rules", justify="right")
+    table.add_column("Anti-pat", justify="right")
+    table.add_column("Workflows", justify="right")
+    table.add_column("Code", justify="right")
+
+    totals = {"concepts": 0, "principles": 0, "rules": 0, "anti": 0, "workflows": 0, "code": 0}
+    for sc in sidecars:
+        nc = len(sc.concepts)
+        np = len(sc.principles)
+        nr = len(sc.rules)
+        na = len(sc.anti_patterns)
+        nw = len(sc.actionable_workflows)
+        ncode = len(sc.code_examples)
+        totals["concepts"] += nc
+        totals["principles"] += np
+        totals["rules"] += nr
+        totals["anti"] += na
+        totals["workflows"] += nw
+        totals["code"] += ncode
+        table.add_row(
+            f"{sc.chapter_id}: {sc.title[:40]}",
+            str(nc) if nc else "[dim]-[/dim]",
+            str(np) if np else "[dim]-[/dim]",
+            str(nr) if nr else "[dim]-[/dim]",
+            str(na) if na else "[dim]-[/dim]",
+            str(nw) if nw else "[dim]-[/dim]",
+            str(ncode) if ncode else "[dim]-[/dim]",
+        )
+    table.add_row(
+        "[bold]total[/bold]",
+        f"[bold]{totals['concepts']}[/bold]",
+        f"[bold]{totals['principles']}[/bold]",
+        f"[bold]{totals['rules']}[/bold]",
+        f"[bold]{totals['anti']}[/bold]",
+        f"[bold]{totals['workflows']}[/bold]",
+        f"[bold]{totals['code']}[/bold]",
+    )
+    console.print(table)
+
+    # Cross-chapter themes: concepts that appear in 2+ chapters (by name, case-insensitive)
+    concept_chapters: dict[str, list[str]] = {}
+    for sc in sidecars:
+        for c in sc.concepts:
+            key = c.name.lower()
+            concept_chapters.setdefault(key, []).append(sc.chapter_id)
+    cross_chapter = {k: v for k, v in concept_chapters.items() if len(v) >= 2}
+    if cross_chapter:
+        console.print()
+        console.print(
+            f"  [bold]Cross-chapter concepts[/bold] ({len(cross_chapter)} spanning 2+ chapters):"
+        )
+        for name, chapters in sorted(cross_chapter.items(), key=lambda x: -len(x[1]))[:10]:
+            console.print(f"    {name} — {', '.join(chapters)}")
+
+    # Top anti-patterns
+    anti_counts = Counter(a.name for sc in sidecars for a in sc.anti_patterns)
+    if anti_counts:
+        console.print()
+        console.print(f"  [bold]Anti-patterns extracted:[/bold] {sum(anti_counts.values())} total")
+        for name, count in anti_counts.most_common(5):
+            console.print(f"    {name} ({count}x)")
+
+    console.print()
+    console.print(
+        f"  [dim]{len(sidecars)} chapters mapped · "
+        f"{totals['concepts']} concepts · {totals['rules']} rules · "
+        f"{totals['workflows']} workflows · {totals['code']} code examples[/dim]"
+    )
+    console.print(
+        "  [dim]Next: plan (1 Opus call) + reduce (~"
+        f"{max(8, len(sidecars) // 2 + 8)} Sonnet calls)[/dim]"
+    )
+    console.print()
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return  # auto-proceed in non-interactive mode
+
+    import questionary
+
+    action = questionary.select(
+        "Proceed to plan?",
+        choices=[
+            questionary.Choice("Proceed", value="proceed"),
+            questionary.Choice("Cancel", value="cancel"),
+        ],
+    ).ask()
+
+    if action is None or action == "cancel":
+        console.print("[dim]cancelled[/dim]")
+        raise typer.Exit(code=0)
 
 
 def _pick_gate_one(book_path: Path) -> bool:
