@@ -37,6 +37,29 @@ _CATEGORY_FIELDS: tuple[str, ...] = (
     "cross_references",
 )
 
+# The planner sometimes uses shortened or singular category names in
+# feeds_from paths despite the prompt saying not to. This mapping
+# catches common drift and resolves to the canonical field name so
+# a slightly wrong path still feeds the right data into the generator.
+_CATEGORY_ALIASES: dict[str, str] = {
+    "concept": "concepts",
+    "principle": "principles",
+    "rule": "rules",
+    "anti_pattern": "anti_patterns",
+    "antipattern": "anti_patterns",
+    "antipatterns": "anti_patterns",
+    "code_example": "code_examples",
+    "example": "code_examples",
+    "examples": "code_examples",
+    "decision_rule": "decision_rules",
+    "workflow": "actionable_workflows",
+    "workflows": "actionable_workflows",
+    "actionable_workflow": "actionable_workflows",
+    "term": "terminology",
+    "terms": "terminology",
+    "cross_reference": "cross_references",
+}
+
 _BOOK_FIELDS: frozenset[str] = frozenset(
     {"metadata", "classification", "cross_chapter_themes", "glossary", "structure"}
 )
@@ -107,7 +130,7 @@ def _resolve_one(
     book_out: dict[str, Any],
     unresolved: list[str],
 ) -> None:
-    parts = path.split(".", 2)
+    parts = path.split(".")
     if not parts or not parts[0]:
         unresolved.append(path)
         return
@@ -139,7 +162,8 @@ def _resolve_one(
                 bucket[cat] = list(items)
         return
 
-    category = parts[1]
+    raw_category = parts[1]
+    category = _CATEGORY_ALIASES.get(raw_category, raw_category)
     if category not in _CATEGORY_FIELDS:
         unresolved.append(path)
         return

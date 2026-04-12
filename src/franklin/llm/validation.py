@@ -3,21 +3,24 @@
 The map and plan stages force Claude through tool-use with strict
 ``extra="forbid"`` schemas — the outgoing JSON schema carries
 ``additionalProperties: false`` so the model is nudged to stay
-on-contract. But models do occasionally slip an unknown key onto a
-sub-object (e.g. generalizing ``source_quote`` from ``Concept`` onto
-``Principle``), and a single stray field shouldn't kill an entire
-chapter's worth of extraction or a whole plan call.
+on-contract. But models do occasionally drift:
 
-This helper validates strictly first, and if the *only* failures are
-``extra_forbidden`` errors, strips exactly those paths from a deep copy
-of the payload, logs a warning naming what was dropped, and retries.
-Any other validation error (missing required field, wrong type) still
-raises — we don't mask real bugs.
+- **Stray fields** — e.g. generalizing ``source_quote`` from ``Concept``
+  onto ``Principle``. Handled by catching ``extra_forbidden`` errors,
+  stripping exactly those paths, and retrying.
+- **Stringified JSON** — the model returns a JSON string (``"[{...}]"``)
+  where a list or dict is expected. Handled by a pre-validation pass
+  that detects string values where the schema expects a composite type
+  and ``json.loads`` them in place.
+
+Both recovery paths log warnings so the drift is visible in run output
+rather than silently swallowed.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from typing import Any
 
@@ -32,14 +35,15 @@ def validate_with_extra_recovery[ModelT: BaseModel](
     *,
     label: str,
 ) -> ModelT:
-    """Validate ``payload`` against ``model_cls``, recovering from stray extras.
+    """Validate ``payload`` against ``model_cls``, recovering from LLM drift.
 
     ``label`` is included in the warning log line and the eventual error
     message so callers can identify which artifact / chapter the
     payload came from when triaging.
     """
+    cleaned = _fix_stringified_json(payload, label)
     try:
-        return model_cls.model_validate(payload)
+        return model_cls.model_validate(cleaned)
     except ValidationError as exc:
         errors = exc.errors()
         extras = [e for e in errors if e.get("type") == "extra_forbidden"]
@@ -47,7 +51,7 @@ def validate_with_extra_recovery[ModelT: BaseModel](
         if not extras or non_extras:
             raise
 
-        cleaned = copy.deepcopy(payload) if isinstance(payload, dict) else payload
+        cleaned = copy.deepcopy(cleaned) if isinstance(cleaned, dict) else cleaned
         stripped_paths: list[str] = []
         for err in extras:
             loc = err.get("loc", ())
@@ -63,6 +67,37 @@ def validate_with_extra_recovery[ModelT: BaseModel](
             )
 
         return model_cls.model_validate(cleaned)
+
+
+def _fix_stringified_json(payload: Any, label: str) -> Any:
+    """Detect top-level values that are JSON strings and deserialize them.
+
+    LLMs occasionally return ``"[{...}]"`` (a string) where the schema
+    expects ``[{...}]`` (an actual list). This walks the top-level dict
+    keys and, for any value that's a string starting with ``[`` or ``{``,
+    attempts ``json.loads``. On success, replaces in-place and logs.
+    Failures are silently ignored — Pydantic will catch the real error.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    fixed: list[str] = []
+    for key, value in payload.items():
+        if isinstance(value, str) and value.strip()[:1] in ("[", "{"):
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(parsed, (list, dict)):
+                payload[key] = parsed
+                fixed.append(key)
+    if fixed:
+        logger.warning(
+            "%s: deserialized %d stringified JSON field(s): %s",
+            label,
+            len(fixed),
+            ", ".join(fixed),
+        )
+    return payload
 
 
 def _delete_at_path(payload: Any, loc: tuple[Any, ...] | list[Any]) -> bool:

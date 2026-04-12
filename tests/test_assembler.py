@@ -266,10 +266,24 @@ def test_validate_frontmatter_flags_missing_block(tmp_path: Path) -> None:
 
 def test_validate_frontmatter_flags_malformed_yaml(tmp_path: Path) -> None:
     root = _write_valid_plugin(tmp_path)
-    (root / "agents/reviewer.md").write_text("---\nname: [unterminated list\n---\n\n# Body\n")
+    # Use a YAML syntax that the repair heuristic can't fix: a tab character
+    # in an indentation-sensitive context breaks the YAML parser outright.
+    (root / "agents/reviewer.md").write_text("---\n\t: broken\n---\n\n# Body\n")
     issues = validate_frontmatter(root)
     assert len(issues) == 1
     assert issues[0].kind == "unparseable"
+
+
+def test_validate_frontmatter_repairs_unquoted_colons(tmp_path: Path) -> None:
+    """LLMs sometimes put Rails migration syntax into YAML descriptions,
+    causing colons that break the parser. The repair heuristic should
+    quote the value and parse successfully."""
+    root = _write_valid_plugin(tmp_path)
+    (root / "commands/spec-test.md").write_text(
+        "---\ndescription: Create a migration: null: false, foreign_key: true\n---\n\n# Body\n"
+    )
+    issues = validate_frontmatter(root)
+    assert not issues
 
 
 def test_validate_frontmatter_flags_missing_required_field(tmp_path: Path) -> None:

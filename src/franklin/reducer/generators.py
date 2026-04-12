@@ -17,6 +17,8 @@ from typing import Any
 from franklin.llm import (
     cached_text_block,
     call_tool,
+    call_tool_async,
+    make_async_client,
     make_client,
     render_prompt,
     text_block,
@@ -130,6 +132,69 @@ def generate_artifact(
     system_content: list[dict[str, Any]] = [cached_text_block(_SYSTEM_PROMPT)]
 
     result = call_tool(
+        client=llm,
+        model=model,
+        system=system_content,
+        user=user_content,
+        tool_name=_TOOL_NAME,
+        tool_description=_TOOL_DESCRIPTION,
+        tool_schema=_TOOL_SCHEMA,
+        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
+    )
+
+    content = result.input.get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(f"generator returned empty or non-string content for {artifact.path}")
+
+    return GenerationResult(
+        content=content,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cache_read_tokens=result.cache_read_tokens,
+        cache_creation_tokens=result.cache_creation_tokens,
+    )
+
+
+async def generate_artifact_async(
+    artifact: Artifact,
+    *,
+    plan: PlanManifest,
+    book: BookManifest,
+    sidecars: dict[str, ChapterSidecar],
+    client: Any | None = None,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int | None = None,
+) -> GenerationResult:
+    """Async counterpart of ``generate_artifact`` for concurrent reducing."""
+    llm = client if client is not None else make_async_client()
+
+    context = resolve_feeds(artifact.feeds_from, book=book, sidecars=sidecars)
+    if context.unresolved:
+        logger.warning(
+            "reducer:%s: %d unresolved feed path(s) — generated content "
+            "may be missing context: %s",
+            artifact.path,
+            len(context.unresolved),
+            ", ".join(context.unresolved),
+        )
+
+    template_name = _template_name_for(artifact.type)
+    template_vars = _build_template_vars(artifact=artifact, plan=plan, context=context)
+    rendered = render_prompt(template_name, **template_vars)
+
+    if CACHE_BREAKPOINT not in rendered:
+        raise RuntimeError(
+            f"prompt template {template_name!r} is missing the CACHE-BREAKPOINT marker"
+        )
+    prefix, suffix = rendered.split(CACHE_BREAKPOINT, maxsplit=1)
+
+    user_content: list[dict[str, Any]] = [
+        cached_text_block(prefix.rstrip()),
+        text_block(suffix.lstrip()),
+    ]
+    system_content: list[dict[str, Any]] = [cached_text_block(_SYSTEM_PROMPT)]
+
+    result = await call_tool_async(
         client=llm,
         model=model,
         system=system_content,

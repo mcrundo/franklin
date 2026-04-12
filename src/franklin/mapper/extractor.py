@@ -16,7 +16,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from franklin.llm import call_tool, make_client, render_prompt, validate_with_extra_recovery
+from franklin.llm import (
+    call_tool,
+    call_tool_async,
+    make_async_client,
+    make_client,
+    render_prompt,
+    validate_with_extra_recovery,
+)
 from franklin.llm.client import DEFAULT_MAX_TOKENS
 from franklin.schema import (
     BookManifest,
@@ -66,6 +73,45 @@ def extract_chapter(
     tool_schema = build_tool_schema()
 
     result = call_tool(
+        client=llm,
+        model=model,
+        system=_SYSTEM_PROMPT,
+        user=user_prompt,
+        tool_name=_TOOL_NAME,
+        tool_description=_TOOL_DESCRIPTION,
+        tool_schema=tool_schema,
+        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
+    )
+
+    try:
+        extraction = validate_with_extra_recovery(
+            ChapterExtraction,
+            result.input,
+            label=f"mapper:{chapter.chapter_id}",
+        )
+    except ValidationError as exc:
+        raise RuntimeError(
+            f"extractor returned invalid payload for {chapter.chapter_id}: {exc}"
+        ) from exc
+
+    sidecar = ChapterSidecar.from_extraction(chapter, extraction)
+    return sidecar, result.input_tokens, result.output_tokens
+
+
+async def extract_chapter_async(
+    book: BookManifest,
+    chapter: NormalizedChapter,
+    *,
+    model: str = DEFAULT_MODEL,
+    client: Any | None = None,
+    max_tokens: int | None = None,
+) -> tuple[ChapterSidecar, int, int]:
+    """Async counterpart of ``extract_chapter`` for concurrent mapping."""
+    llm = client if client is not None else make_async_client()
+    user_prompt = build_user_prompt(book, chapter)
+    tool_schema = build_tool_schema()
+
+    result = await call_tool_async(
         client=llm,
         model=model,
         system=_SYSTEM_PROMPT,

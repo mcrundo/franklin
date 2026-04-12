@@ -5,6 +5,7 @@ from franklin.reducer.generators import (
     DEFAULT_MODEL,
     GenerationResult,
     generate_artifact,
+    generate_artifact_async,
 )
 from franklin.reducer.resolver import ResolvedContext, resolve_feeds
 
@@ -14,5 +15,6 @@ __all__ = [
     "GenerationResult",
     "ResolvedContext",
     "generate_artifact",
+    "generate_artifact_async",
     "resolve_feeds",
 ]

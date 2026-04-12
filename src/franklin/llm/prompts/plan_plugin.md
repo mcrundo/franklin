@@ -49,7 +49,7 @@ Read the distilled book below in full, then call the `save_plan_proposal` tool w
    - `type` — one of `skill`, `reference`, `command`, `agent`
    - `path` — the relative path inside the plugin tree (e.g. `skills/layered-rails/references/patterns/service-objects.md`)
    - `brief` — one or two sentences describing what the file should contain
-   - `feeds_from` — list of dotted paths into the sidecars the reduce stage will use. Valid forms: `chNN.concepts`, `chNN.anti_patterns`, `chNN.actionable_workflows`, etc. You can also cite whole sidecars (`chNN`) or book-level data (`book.metadata`, `book.cross_chapter_themes`).
+   - `feeds_from` — list of **category-level** dotted paths into the sidecars. Valid categories: `concepts`, `principles`, `rules`, `anti_patterns`, `code_examples`, `decision_rules`, `actionable_workflows`, `terminology`, `cross_references`. Valid forms: `chNN` (whole sidecar), `chNN.concepts`, `chNN.anti_patterns`, `chNN.actionable_workflows`, `book.metadata`, `book.cross_chapter_themes`. **NEVER use individual item IDs** like `ch04.workflow.create-new-app` — only the category name after the dot (e.g. `ch04.actionable_workflows`).
    - `estimated_output_tokens` — a rough estimate (1500–4000 for a reference file, 500–2000 for a command, 2000–4000 for an agent).
 4. **coherence_rules** — 3–8 short instructions for the reduce stage to keep output consistent (terminology choices, citation style, linking conventions, voice).
 5. **skipped_artifact_types** — Artifact types you chose NOT to propose, with reasons. Valid entries include `mcp_server`, `hook`, `output_style`, `statusline`. Be explicit — if the book has no API content, say so.
