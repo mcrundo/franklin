@@ -69,7 +69,8 @@ from franklin.license import login as license_login
 from franklin.license import logout as license_logout
 from franklin.license import status as license_status
 from franklin.license import whoami as license_whoami
-from franklin.mapper import DEFAULT_MODEL, build_user_prompt, extract_chapter
+from franklin.llm import make_async_client
+from franklin.mapper import DEFAULT_MODEL, build_user_prompt
 from franklin.picker import (
     ALL_FORMATS,
     DEFAULT_FORMATS,
@@ -82,7 +83,6 @@ from franklin.planner import build_user_prompt as build_plan_prompt
 from franklin.planner import design_plan
 from franklin.publisher import PushError, push_plugin
 from franklin.reducer import DEFAULT_MODEL as REDUCER_DEFAULT_MODEL
-from franklin.reducer import generate_artifact
 from franklin.review import apply_omissions, parse_omit_selection
 from franklin.schema import (
     Artifact,
@@ -727,6 +727,9 @@ def _dry_run_prompt(run: RunDirectory, manifest: BookManifest, chapter: Normaliz
     console.print(prompt)
 
 
+_DEFAULT_MAP_CONCURRENCY = 8
+
+
 def _extract_all(
     run: RunDirectory,
     manifest: BookManifest,
@@ -734,37 +737,59 @@ def _extract_all(
     *,
     model: str,
     force: bool,
+    concurrency: int = _DEFAULT_MAP_CONCURRENCY,
 ) -> None:
+    import asyncio
+
+    from franklin.mapper import extract_chapter_async
+
+    to_extract: list[NormalizedChapter] = []
+    skipped = 0
+    for chapter in targets:
+        if run.sidecar_path(chapter.chapter_id).exists() and not force:
+            skipped += 1
+        else:
+            to_extract.append(chapter)
+
+    if skipped:
+        console.print(f"  [dim]{skipped} chapter(s) already extracted, skipping[/dim]")
+
+    if not to_extract:
+        console.print("[green]✓[/green] map stage complete: 0 extracted, all skipped")
+        return
+
     total_in = 0
     total_out = 0
-    skipped = 0
     extracted = 0
+    llm = make_async_client()
 
-    with _stage_progress("Mapping") as (progress, task_id):
-        progress.update(task_id, total=len(targets))
+    async def _run() -> None:
+        nonlocal total_in, total_out, extracted
+        sem = asyncio.Semaphore(concurrency)
 
-        for chapter in targets:
-            sidecar_path = run.sidecar_path(chapter.chapter_id)
-            if sidecar_path.exists() and not force:
-                skipped += 1
+        async def one(chapter: NormalizedChapter) -> None:
+            nonlocal total_in, total_out, extracted
+            async with sem:
+                progress.update(task_id, last=f"-> {chapter.chapter_id}")
+                sidecar, in_toks, out_toks = await extract_chapter_async(
+                    manifest, chapter, model=model, client=llm
+                )
+                run.save_sidecar(sidecar)
+                total_in += in_toks
+                total_out += out_toks
+                extracted += 1
                 progress.update(
                     task_id,
                     advance=1,
-                    last=f"skip {chapter.chapter_id}",
+                    last=f"v {chapter.chapter_id} ({len(sidecar.concepts)}c/{len(sidecar.rules)}r)",  # noqa: E501
                 )
-                continue
 
-            progress.update(task_id, last=f"→ {chapter.chapter_id}")
-            sidecar, in_toks, out_toks = extract_chapter(manifest, chapter, model=model)
-            run.save_sidecar(sidecar)
-            total_in += in_toks
-            total_out += out_toks
-            extracted += 1
-            progress.update(
-                task_id,
-                advance=1,
-                last=(f"✓ {chapter.chapter_id} ({len(sidecar.concepts)}c/{len(sidecar.rules)}r)"),
-            )
+        tasks = [one(ch) for ch in to_extract]
+        await asyncio.gather(*tasks, return_exceptions=False)
+
+    with _stage_progress("Mapping") as (progress, task_id):
+        progress.update(task_id, total=len(to_extract))
+        asyncio.run(_run())
 
     cost = _sonnet_cost_usd(total_in, total_out)
     console.print()
@@ -994,6 +1019,9 @@ def _select_artifacts(
     return list(plan.artifacts)
 
 
+_DEFAULT_REDUCE_CONCURRENCY = 3
+
+
 def _generate_artifacts(
     run: RunDirectory,
     *,
@@ -1003,76 +1031,100 @@ def _generate_artifacts(
     targets: list[Artifact],
     model: str,
     force: bool,
+    concurrency: int = _DEFAULT_REDUCE_CONCURRENCY,
 ) -> None:
+    import asyncio
+
+    from franklin.reducer import generate_artifact_async
+
     output_root = run.output_dir / plan.plugin.name
     output_root.mkdir(parents=True, exist_ok=True)
 
+    to_generate: list[Artifact] = []
+    skipped = 0
+    for artifact in targets:
+        out_path = output_root / artifact.path
+        if out_path.exists() and not force:
+            skipped += 1
+        else:
+            to_generate.append(artifact)
+
     console.print(
-        f"[bold]Generating[/bold] {len(targets)} artifacts for "
+        f"[bold]Generating[/bold] {len(to_generate)} artifacts for "
         f"[cyan]{plan.plugin.name}[/cyan] using [dim]{model}[/dim]"
     )
     console.print(f"  output: {output_root}")
+    if skipped:
+        console.print(f"  [dim]{skipped} artifact(s) already exist, skipping[/dim]")
     console.print()
 
-    totals = {
+    if not to_generate:
+        console.print("[green]✓[/green] reduce stage complete: 0 generated, all skipped")
+        return
+
+    totals: dict[str, int] = {
         "input": 0,
         "output": 0,
         "cache_read": 0,
         "cache_creation": 0,
         "generated": 0,
-        "skipped": 0,
         "failed": 0,
     }
+    llm = make_async_client()
 
-    with _stage_progress("Reducing") as (progress, task_id):
-        progress.update(task_id, total=len(targets))
+    async def _run() -> None:
+        sem = asyncio.Semaphore(concurrency)
 
-        for artifact in targets:
-            out_path = output_root / artifact.path
-            if out_path.exists() and not force:
-                totals["skipped"] += 1
-                progress.update(task_id, advance=1, last=f"skip {artifact.id}")
-                continue
+        async def one(artifact: Artifact) -> None:
+            async with sem:
+                progress.update(task_id, last=f"-> {artifact.type.value}:{artifact.id}")
+                try:
+                    result = await generate_artifact_async(
+                        artifact,
+                        plan=plan,
+                        book=book,
+                        sidecars=sidecars,
+                        client=llm,
+                        model=model,
+                    )
+                except Exception as exc:
+                    totals["failed"] += 1
+                    progress.update(
+                        task_id,
+                        advance=1,
+                        last=f"[red]x {artifact.id}: {exc}[/red]",
+                    )
+                    return
 
-            progress.update(task_id, last=f"→ {artifact.type.value}:{artifact.id}")
-            try:
-                result = generate_artifact(
-                    artifact,
-                    plan=plan,
-                    book=book,
-                    sidecars=sidecars,
-                    model=model,
+                out_path = output_root / artifact.path
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(
+                    result.content if result.content.endswith("\n") else result.content + "\n"
                 )
-            except Exception as exc:
-                totals["failed"] += 1
+
+                totals["input"] += result.input_tokens
+                totals["output"] += result.output_tokens
+                totals["cache_read"] += result.cache_read_tokens
+                totals["cache_creation"] += result.cache_creation_tokens
+                totals["generated"] += 1
                 progress.update(
                     task_id,
                     advance=1,
-                    last=f"[red]✗ {artifact.id}: {exc}[/red]",
+                    last=f"v {artifact.id} ({len(result.content):,} chars)",
                 )
-                continue
 
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(
-                result.content if result.content.endswith("\n") else result.content + "\n"
-            )
+        tasks = [one(a) for a in to_generate]
+        await asyncio.gather(*tasks)
 
-            totals["input"] += result.input_tokens
-            totals["output"] += result.output_tokens
-            totals["cache_read"] += result.cache_read_tokens
-            totals["cache_creation"] += result.cache_creation_tokens
-            totals["generated"] += 1
-            progress.update(
-                task_id,
-                advance=1,
-                last=f"✓ {artifact.id} ({len(result.content):,} chars)",
-            )
+    with _stage_progress("Reducing") as (progress, task_id):
+        progress.update(task_id, total=len(to_generate))
+        asyncio.run(_run())
 
     cost = _sonnet_cost_usd(totals["input"], totals["output"])
     console.print()
     console.print(
         f"[green]✓[/green] reduce stage complete: "
-        f"{totals['generated']} generated, {totals['skipped']} skipped, "
+        f"{totals['generated']} generated, {skipped} skipped, "
         f"{totals['failed']} failed"
     )
     console.print(
@@ -1158,8 +1210,6 @@ def assemble_pipeline(
             f"[green]✓[/green] packaged [cyan]{archive_path.name}[/cyan] "
             f"({size_kb:,.1f} KB) at {archive_path}"
         )
-
-    _print_next_steps(run_dir=run_dir, pushed=False, pushed_repo=None)
 
 
 def _print_grade_card(grade: RunGrade, *, plan_name: str) -> None:

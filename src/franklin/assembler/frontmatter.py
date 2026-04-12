@@ -80,15 +80,23 @@ def _validate_file(path: Path, category: str) -> list[FrontmatterIssue]:
 
     try:
         data: Any = yaml.safe_load(match.group(1))
-    except yaml.YAMLError as exc:
-        return [
-            FrontmatterIssue(
-                source_file=path,
-                category=category,
-                kind="unparseable",
-                message=f"YAML parse error: {exc}",
-            )
-        ]
+    except yaml.YAMLError:
+        repaired = _try_repair_yaml(match.group(1))
+        if repaired is not None:
+            data = repaired
+        else:
+            try:
+                # Re-parse for the error message since we consumed the first exc.
+                yaml.safe_load(match.group(1))
+            except yaml.YAMLError as exc2:
+                return [
+                    FrontmatterIssue(
+                        source_file=path,
+                        category=category,
+                        kind="unparseable",
+                        message=f"YAML parse error: {exc2}",
+                    )
+                ]
 
     if not isinstance(data, dict):
         return [
@@ -124,3 +132,35 @@ def _validate_file(path: Path, category: str) -> list[FrontmatterIssue]:
             )
 
     return issues
+
+
+_SIMPLE_KV_RE = re.compile(r"^([a-z][a-z_-]*)\s*:\s*(.+)$", re.IGNORECASE)
+
+
+def _try_repair_yaml(raw: str) -> dict[str, Any] | None:
+    """Heuristic repair for LLM-generated YAML frontmatter.
+
+    The most common failure mode: the LLM puts unquoted colons in a
+    description value (e.g. ``null: false, foreign_key: true``), which
+    YAML interprets as nested mapping keys. This repair quotes every
+    scalar value that isn't already quoted, then re-parses.
+
+    Returns the parsed dict on success, or None if repair didn't help.
+    """
+    lines: list[str] = []
+    for line in raw.splitlines():
+        m = _SIMPLE_KV_RE.match(line)
+        if m:
+            key, value = m.group(1), m.group(2).strip()
+            if not (value.startswith('"') or value.startswith("'") or value.startswith(">")):
+                value = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            lines.append(f"{key}: {value}")
+        else:
+            lines.append(line)
+    try:
+        data = yaml.safe_load("\n".join(lines))
+    except yaml.YAMLError:
+        return None
+    if isinstance(data, dict):
+        return data
+    return None

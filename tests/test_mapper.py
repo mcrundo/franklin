@@ -232,6 +232,37 @@ def test_extract_chapter_recovers_from_multiple_stray_extras() -> None:
     assert [p.id for p in sidecar.principles] == ["p1", "p2"]
 
 
+def test_extract_chapter_recovers_from_stringified_json_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """LLMs occasionally return a JSON string where a list is expected
+    (e.g. anti_patterns as '"[{...}]"' instead of [{...}]). The
+    validator should deserialize the string and proceed."""
+    import json
+
+    anti_patterns_list = [
+        {
+            "id": "ch03.anti.god-service",
+            "name": "God Service",
+            "description": "A service that does too much",
+            "fix": "Split by domain",
+            "source_location": "ch03 §4",
+        },
+    ]
+    payload = {
+        "summary": "A chapter with stringified anti_patterns.",
+        "anti_patterns": json.dumps(anti_patterns_list),
+    }
+    client = _FakeClient(payload)
+
+    with caplog.at_level("WARNING", logger="franklin.llm.validation"):
+        sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
+
+    assert len(sidecar.anti_patterns) == 1
+    assert sidecar.anti_patterns[0].name == "God Service"
+    assert any("stringified JSON" in r.message for r in caplog.records)
+
+
 def test_extract_chapter_still_rejects_non_extra_errors() -> None:
     """Missing required fields are NOT recoverable — only stray extras are."""
     payload = {

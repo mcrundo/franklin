@@ -4,13 +4,13 @@ You are generating one reference file for a Claude Code plugin derived from a te
 
 ## What a reference file looks like
 
-Reference files are plain markdown — **no frontmatter block**. They are read top-to-bottom by a developer who needs detail, not skimmed for navigation. Follow this structure:
+Reference files are plain markdown — **no frontmatter block**. They are read top-to-bottom by a developer who needs depth on a topic. Every reference file MUST include ALL of the following sections in this order:
 
 1. `# Title` — one-line heading naming the topic
-2. **Overview** — one short paragraph (2–3 sentences) saying what this topic is and why it matters in the context of the book
+2. **Problem framing** (required) — open with the problem this pattern/concept solves. Name the concrete pain a Rails developer hits first, THEN introduce the solution. Follow the book's teaching pattern: show the Rails-native approach, name the trigger that prompts extraction, then present the pattern.
 3. **Main sections** — the depth content, organized by subtopic. Use `##` headings freely.
-4. **When to use / When NOT to use** — for pattern references, a short section with clear criteria drawn from the book's decision rules
-5. **Code examples** — in fenced blocks with language identifiers (```ruby, ```yaml, ```erb), quoted verbatim from the sidecar data
+4. **When to use / When NOT to use** (required) — a short section with clear criteria drawn from the book's decision rules or principles. Even for core/conceptual references, state when the guidance applies and when it does not.
+5. **Code examples** (required) — at least one fenced code block with language identifiers (```ruby, ```yaml, ```erb), quoted from the sidecar data. If the sidecar has code examples, use them. If not, extract a short illustrative snippet from the rules or principles.
 6. **Related references** — closing section with relative markdown links to related files in the plugin tree
 
 Target length: the brief will include an estimated token count (typically 2000–4000). Write tightly. Don't pad.
@@ -29,7 +29,7 @@ Target length: the brief will include an estimated token count (typically 2000�
 2. **Preserve code exactly.** Code blocks must be copied as-is including whitespace. Use the author's own labels ("Listing 3.1") when the sidecar records one.
 3. **Cite sparingly.** An italicized `_source: chNN §X_` at the end of a non-obvious claim is enough. Do not cite every sentence.
 4. **Link, don't duplicate.** Cross-reference other files with relative markdown links when the topic overlaps. See the plugin file tree below for the only valid link targets.
-5. **Start with the problem.** Follow the book's teaching pattern — show the Rails-native approach first, name the trigger that prompts extraction, then present the pattern.
+5. **Start with the problem.** The "problem framing" section is mandatory. Name the pain before the pattern.
 6. **No frontmatter.** Reference files are plain markdown only.
 7. **No placeholders in output.** Your generated file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<relative path to reference>`, `<command name>`, etc). Fill every value in with a real, literal string. If you are tempted to write an example path in a form like `<path/to/file>`, either write out a specific real path from the plugin tree or describe the concept in prose without a link.
 

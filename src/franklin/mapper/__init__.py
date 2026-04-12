@@ -9,6 +9,7 @@ from franklin.mapper.extractor import (
     build_tool_schema,
     build_user_prompt,
     extract_chapter,
+    extract_chapter_async,
     format_code_blocks,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "build_tool_schema",
     "build_user_prompt",
     "extract_chapter",
+    "extract_chapter_async",
     "format_code_blocks",
 ]
