@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `bin/release` script automates the entire release flow: version bump, changelog cut, sanity gate, commit, tag, push. See `docs/releasing.md`.
+- Tag-triggered GitHub Actions workflow (`.github/workflows/release.yml`) creates a GitHub Release with changelog notes when a `v*.*.*` tag is pushed.
+- Homebrew auto-bump workflow (`.github/workflows/homebrew-bump.yml`) waits for PyPI, fetches the new sdist URL + sha256, and opens a PR on the `mcrundo/homebrew-franklin` tap.
+- Homebrew tap is live: `brew tap mcrundo/franklin && brew install franklin-book`.
+
+### Changed
+
+- Map and reduce stages now run concurrently via `AsyncAnthropic` with bounded semaphores. Map defaults to 8 in-flight, reduce to 3. A 26-chapter PDF pipeline drops from ~74 min to ~20 min wall clock.
+- Cost estimate callout is now a Rich Panel explaining that estimates are budget ceilings, not predictions, with a CTA to report real costs.
+- Reference prompt template now requires problem framing, "When to use", and code examples as mandatory structural sections (previously suggestions; their absence caused F grades).
+- Plan prompt now explicitly enumerates valid `feeds_from` category names and forbids item-level IDs.
+
+### Fixed
+
+- Double "Next steps" block: `assemble` printed it, then `run_pipeline` printed it again.
+- Stringified JSON recovery: LLMs sometimes return a JSON string where a list is expected (e.g. `anti_patterns` as `"[{...}]"`). The validator now deserializes these before Pydantic validation.
+- Planner feed alignment: added an alias map in the resolver so common short names (`workflow` -> `actionable_workflows`, `concept` -> `concepts`, etc.) resolve correctly instead of appearing as unresolved feeds.
+- YAML frontmatter repair: when the LLM puts unquoted colons in a description (e.g. Rails migration syntax `null: false`), the assembler now tries quoting scalar values before reporting a parse error.
+
 ## [0.2.0] - 2026-04-11
 
 Picker UX overhaul, a pre-map confirmation gate, robustness fixes against LLM drift, and Homebrew distribution.
