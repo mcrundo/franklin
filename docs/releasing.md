@@ -49,7 +49,7 @@ publish.yml     homebrew-bump.yml
 PyPI 0.3.0       Tap PR
 ```
 
-You then review and merge the tap PR. Manual review is intentional — if dependencies changed, you'll want to re-run `brew update-python-resources Formula/franklin-book.rb` locally before merging, since that needs Homebrew installed and the workflow can't do it on a Linux runner.
+You then review and merge the tap PR. The formula uses pip with pre-built wheels (not source builds), so dependency changes are resolved automatically — just smoke-test with `brew install franklin-book && brew test franklin-book` before merging.
 
 ## Required secrets
 
