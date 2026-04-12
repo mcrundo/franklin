@@ -108,6 +108,55 @@ class RunDirectory:
     def load_plan(self) -> PlanManifest:
         return parse_json(PlanManifest, self.plan_json.read_text())
 
+    # ---- cost tracking ----
+
+    @property
+    def costs_json(self) -> Path:
+        return self.root / "costs.json"
+
+    def append_cost(
+        self,
+        *,
+        stage: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int = 0,
+        cost_usd: float,
+    ) -> None:
+        """Append a cost entry to costs.json (one JSON object per line)."""
+        import json
+        from datetime import UTC, datetime
+
+        entry = {
+            "stage": stage,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cost_usd": round(cost_usd, 4),
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        self.root.mkdir(parents=True, exist_ok=True)
+        with open(self.costs_json, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def load_costs(self) -> list[dict[str, object]]:
+        """Read all cost entries from costs.json (JSONL format)."""
+        import json
+
+        if not self.costs_json.exists():
+            return []
+        entries: list[dict[str, object]] = []
+        for line in self.costs_json.read_text().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+        return entries
+
     # ---- map-stage chapter selection ----
     #
     # Set by `franklin pick`'s Gate 1 when the user deselects chapters.

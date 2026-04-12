@@ -479,7 +479,14 @@ def ingest(
     _maybe_confirm_metadata(manifest, skip=yes)
 
     if clean:
-        chapters = _run_cleanup_pass(chapters, concurrency=clean_concurrency)
+        chapters, cleanup_cost = _run_cleanup_pass(chapters, concurrency=clean_concurrency)
+        run.append_cost(
+            stage="cleanup",
+            model="claude-sonnet-4-6",
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=cleanup_cost,
+        )
         # Rebuild structure totals from the cleaned chapters so book.json reflects
         # the post-cleanup word counts.
         manifest.structure.total_words = sum(c.word_count for c in chapters)
@@ -505,7 +512,7 @@ def ingest(
 
 def _run_cleanup_pass(
     chapters: list[NormalizedChapter], *, concurrency: int
-) -> list[NormalizedChapter]:
+) -> tuple[list[NormalizedChapter], float]:
     """Invoke the Tier 4 LLM cleanup pass via the async pipeline.
 
     Drives ``clean_chapters_async`` via ``asyncio.run`` with a bounded
@@ -572,7 +579,7 @@ def _run_cleanup_pass(
             f"  [yellow]{len(failed_ids)} failures:[/yellow] "
             f"{', '.join(failed_ids)} — kept Tier 2 output for these"
         )
-    return cleaned
+    return cleaned, actual_cost
 
 
 def _print_pdf_warning() -> None:
@@ -794,6 +801,13 @@ def _extract_all(
         asyncio.run(_run())
 
     cost = _sonnet_cost_usd(total_in, total_out)
+    run.append_cost(
+        stage="map",
+        model=model,
+        input_tokens=total_in,
+        output_tokens=total_out,
+        cost_usd=cost,
+    )
     console.print()
     console.print(
         f"[green]✓[/green] map stage complete: "
@@ -862,6 +876,17 @@ def plan_pipeline(
     )
     plan, in_toks, out_toks = design_plan(manifest, sidecars, model=model)
     run.save_plan(plan)
+
+    from franklin.estimate import _opus_cost
+
+    plan_cost = _opus_cost(in_toks, out_toks)
+    run.append_cost(
+        stage="plan",
+        model=model,
+        input_tokens=in_toks,
+        output_tokens=out_toks,
+        cost_usd=plan_cost,
+    )
 
     _print_plan_summary(run, plan, in_toks, out_toks)
 
@@ -1123,6 +1148,14 @@ def _generate_artifacts(
         asyncio.run(_run())
 
     cost = _sonnet_cost_usd(totals["input"], totals["output"])
+    run.append_cost(
+        stage="reduce",
+        model=model,
+        input_tokens=totals["input"],
+        output_tokens=totals["output"],
+        cache_read_tokens=totals["cache_read"],
+        cost_usd=cost,
+    )
     console.print()
     console.print(
         f"[green]✓[/green] reduce stage complete: "
@@ -2895,6 +2928,83 @@ def _doctor_presentation(status: CheckStatus) -> tuple[str, str]:
         CheckStatus.WARN: ("[yellow]⚠[/yellow]", "yellow"),
         CheckStatus.FAIL: ("[red]✗[/red]", "red"),
     }[status]
+
+
+@app.command(name="costs")
+def costs_command(
+    base: Path = typer.Option(
+        Path("./runs"),
+        "--base",
+        "-b",
+        help="Base directory to scan for runs",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit as JSON"),
+) -> None:
+    """Show actual API spend across all runs.
+
+    Reads ``costs.json`` from each run directory and prints a per-run +
+    per-stage breakdown with totals. Only includes runs that have cost
+    data (stages run after this feature was added).
+    """
+    from franklin.checkpoint import list_runs as _list_runs
+
+    summaries = _list_runs(base)
+    if not summaries:
+        console.print(f"[dim]no runs found under {base}[/dim]")
+        return
+
+    all_entries: list[dict[str, object]] = []
+    per_run: list[tuple[str, str | None, float]] = []
+
+    for s in summaries:
+        run = RunDirectory(s.path)
+        entries = run.load_costs()
+        if not entries:
+            continue
+        total: float = sum(float(str(e.get("cost_usd", 0))) for e in entries)
+        all_entries.extend(entries)
+        per_run.append((s.slug, s.title, total))
+
+    if not per_run:
+        console.print(
+            "[dim]no cost data found — costs are tracked from the next run onwards[/dim]"
+        )
+        return
+
+    if output_json:
+        import json as _json
+
+        console.print_json(_json.dumps(all_entries, default=str))
+        return
+
+    grand_total = sum(t for _, _, t in per_run)
+
+    console.rule("[bold]Actual API spend[/bold]")
+    console.print()
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Run", style="cyan", overflow="fold")
+    table.add_column("Title", overflow="fold")
+    table.add_column("Cost (USD)", justify="right")
+    for slug, title, run_cost in per_run:
+        table.add_row(slug, title or "—", f"${run_cost:.2f}")
+    table.add_row("[bold]total[/bold]", "", f"[bold]${grand_total:.2f}[/bold]")
+    console.print(table)
+
+    # Per-stage breakdown
+    stage_totals: dict[str, float] = {}
+    for e in all_entries:
+        stage = str(e.get("stage", "unknown"))
+        stage_totals[stage] = stage_totals.get(stage, 0.0) + float(str(e.get("cost_usd", 0)))
+
+    if stage_totals:
+        console.print()
+        console.print("[bold]By stage:[/bold]")
+        for stage, cost in sorted(stage_totals.items(), key=lambda x: -x[1]):
+            bar_len = int(cost / grand_total * 30) if grand_total > 0 else 0
+            bar = "█" * bar_len
+            console.print(f"  {stage:<10} ${cost:>6.2f}  [cyan]{bar}[/cyan]")
+    console.print()
 
 
 @runs_app.command("list")
