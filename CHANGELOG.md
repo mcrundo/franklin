@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `franklin publish <run>` — interactive guided publishing: grade check with auto-fix offer, editable repo name (default from plugin name), owner picker (personal account + orgs from `gh auth`), visibility picker, push, and install command printout.
+- `franklin run --publish` and `franklin pick --publish` — wire the publish flow into the end of the pipeline for a true one-command experience: book file to published GitHub repo.
+- `franklin diff <run-a> <run-b>` — compare two runs side-by-side: overall grade delta, per-artifact score changes with specific checks that fixed or regressed, content size comparison, and cost comparison.
+- `franklin batch book1.epub book2.epub ...` — process multiple books sequentially with all gates auto-confirmed. Summary table with grade and cost per book at the end. Supports `--clean`.
+- `franklin validate <run-dir>` — quick pre-publish rubric check on generated artifacts without full re-grading. Reports specific failed checks per artifact.
+- `franklin stats` — aggregate dashboard: total books, completion rates, average grade, grade distribution, total and per-book cost.
+- `franklin map --concurrency N` and `franklin reduce --concurrency N` — tunable parallelism for API tier limits (defaults: 8 map, 3 reduce).
+- Auto-clean PDF suggestion: `franklin run` on a PDF without `--clean` now prompts to enable cleanup for better extraction quality.
+- Plan stage shows an aesthetic spinner during the Opus call (was silent for 30-60s).
+- `franklin doctor` checks `gh auth status` and warns if not authenticated.
+- Assembled plugins include a `.gitignore` (pycache, .DS_Store, .env).
+- Smarter error recovery: failed pipeline stages now print the exact retry command.
+- 6 new smoke tests for diff, validate, stats, costs commands (388 total).
+
+### Changed
+
+- Run directory slugs now derived from book metadata title (EPUB OPF or PDF metadata) instead of the filename. Capped at 60 chars with word-boundary truncation. A 173-char PDF filename slug becomes ~47 chars from the clean title.
+- Agent grading rubric expanded from 6 to 10 checks: structured checklist table, severity tiers, "Fix these first" guidance, and Output format section.
+- Command grading rubric adds description-length check (under 80 chars).
+- Cleanup cost tracking now records actual input/output token counts instead of zeros.
+- README fully rewritten: leads with zero-touch flow, documents all 18 commands, explains both gates, covers batch mode, stats, costs, concurrency flags, and auto-clean.
+
+### Fixed
+
+- Repo names validated against strict alphanumeric pattern before subprocess calls (security hardening).
+- Subprocess stderr sanitized for GitHub tokens (ghp_, gho_, github_pat_) before inclusion in error messages.
+
 ## [0.3.0] - 2026-04-12
 
 ### Added
