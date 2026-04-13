@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-04-13
+
+### Fixed
+
+- Published plugin repos are now valid Claude Code marketplaces. `franklin push` and `franklin publish` now wrap the plugin tree with a `.claude-plugin/marketplace.json` at the repo root and the plugin under a subdirectory, so users can install with `claude plugin marketplace add owner/repo` + `claude plugin install <name>@<name>`. Previously the pushed tree was the raw plugin, which could not be resolved by the Claude CLI.
+- README install commands and all CLI messaging corrected: the command is `claude plugin install` (not `add`), and installs go through a marketplace, not a direct GitHub URL.
+
 ## [0.4.1] - 2026-04-13
 
 ### Fixed

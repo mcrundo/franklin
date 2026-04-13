@@ -58,11 +58,13 @@ def generate_readme(
     lines.append("")
     if repo:
         lines.append("```bash")
-        lines.append(f"claude plugin add {repo}")
+        lines.append(f"claude plugin marketplace add {repo}")
+        lines.append(f"claude plugin install {plugin.name}@{plugin.name}")
         lines.append("```")
     else:
         lines.append("```bash")
-        lines.append("claude plugin add owner/repo")
+        lines.append("claude plugin marketplace add owner/repo")
+        lines.append(f"claude plugin install {plugin.name}@{plugin.name}")
         lines.append("```")
         lines.append("")
         lines.append(

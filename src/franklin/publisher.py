@@ -1,5 +1,19 @@
 """Push an assembled Claude Code plugin tree to a GitHub repository.
 
+The published repo is structured as a **single-plugin marketplace**:
+
+    repo-root/
+    ├── .claude-plugin/marketplace.json   # lists the one plugin
+    ├── README.md                         # top-level copy for GitHub
+    └── <plugin-name>/                    # the plugin tree itself
+        ├── .claude-plugin/plugin.json
+        └── ...
+
+Users install with:
+
+    claude plugin marketplace add owner/repo
+    claude plugin install <plugin-name>@<plugin-name>
+
 Two backends in priority order:
 
 1. **gh CLI** — if `gh` is on PATH, use it for repo existence checks, repo
@@ -54,12 +68,15 @@ def push_plugin(
     public: bool = False,
     commit_message: str,
 ) -> PushResult:
-    """Push ``plugin_root`` to ``github.com/<repo>``.
+    """Push ``plugin_root`` to ``github.com/<repo>`` as a single-plugin marketplace.
 
-    Creates the repository if it does not exist (private by default,
-    override with ``public=True``). Produces one commit per push with
-    ``commit_message``. When ``create_pr`` is true and ``branch`` is not
-    ``main``, also opens a pull request against ``main``.
+    Wraps the plugin tree in a Claude Code marketplace layout before
+    pushing, so users can install with ``claude plugin marketplace add``
+    and ``claude plugin install``. Creates the repository if it does not
+    exist (private by default, override with ``public=True``). Produces
+    one commit per push with ``commit_message``. When ``create_pr`` is
+    true and ``branch`` is not ``main``, also opens a pull request
+    against ``main``.
     """
     owner, name = _parse_repo(repo)
     if create_pr and branch == "main":
@@ -69,15 +86,17 @@ def push_plugin(
 
     backend = _detect_backend()
 
+    workspace = _build_marketplace_workspace(plugin_root)
+
     created_repo = False
     if not _repo_exists(owner, name, backend):
         _create_repo(owner, name, private=not public, backend=backend)
         created_repo = True
 
-    _stage_git(plugin_root, branch=branch, commit_message=commit_message)
+    _stage_git(workspace, branch=branch, commit_message=commit_message)
 
     remote_url = _remote_url(owner, name, backend)
-    _push_branch(plugin_root, remote_url, branch)
+    _push_branch(workspace, remote_url, branch)
 
     pr_url: str | None = None
     if create_pr:
@@ -90,6 +109,93 @@ def push_plugin(
         pr_url=pr_url,
         backend=backend,
     )
+
+
+# ---------------------------------------------------------------------------
+# Marketplace wrapping
+# ---------------------------------------------------------------------------
+
+
+def _build_marketplace_workspace(plugin_root: Path) -> Path:
+    """Assemble a single-plugin marketplace tree next to ``plugin_root``.
+
+    Copies the plugin into ``<parent>/_publish_<name>/<name>/`` and writes
+    a ``.claude-plugin/marketplace.json`` at the workspace root. The
+    workspace persists so re-pushes reuse its ``.git``; only the plugin
+    subdirectory is refreshed each call.
+    """
+    manifest = _load_plugin_manifest(plugin_root)
+    plugin_name = str(manifest["name"])
+
+    workspace = plugin_root.parent / f"_publish_{plugin_name}"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    plugin_dest = workspace / plugin_name
+    if plugin_dest.exists():
+        shutil.rmtree(plugin_dest)
+    shutil.copytree(plugin_root, plugin_dest, ignore=shutil.ignore_patterns(".git"))
+
+    _write_marketplace_manifest(workspace, manifest)
+    _mirror_top_level_readme(workspace, plugin_dest)
+
+    return workspace
+
+
+def _load_plugin_manifest(plugin_root: Path) -> dict[str, Any]:
+    manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
+    if not manifest_path.exists():
+        raise PushError(
+            f"no plugin.json at {manifest_path} — run `franklin assemble` to produce one"
+        )
+    try:
+        data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PushError(f"plugin.json at {manifest_path} is not valid JSON: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise PushError(f"plugin.json at {manifest_path} must be a JSON object")
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise PushError(f"plugin.json at {manifest_path} is missing required field 'name'")
+    return data
+
+
+def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]) -> Path:
+    plugin_name = str(plugin_manifest["name"])
+    entry: dict[str, Any] = {"name": plugin_name, "source": f"./{plugin_name}"}
+    for field in ("version", "description", "homepage"):
+        value = plugin_manifest.get(field)
+        if isinstance(value, str) and value.strip():
+            entry[field] = value
+    author = plugin_manifest.get("author")
+    if isinstance(author, dict):
+        entry["author"] = author
+    keywords = plugin_manifest.get("keywords")
+    if isinstance(keywords, list):
+        tags = [k for k in keywords if isinstance(k, str)]
+        if tags:
+            entry["tags"] = tags
+
+    manifest = {
+        "name": plugin_name,
+        "owner": author if isinstance(author, dict) else {"name": "franklin"},
+        "metadata": {
+            "description": plugin_manifest.get("description", f"{plugin_name} plugin"),
+        },
+        "plugins": [entry],
+    }
+
+    manifest_dir = workspace / ".claude-plugin"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "marketplace.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest_path
+
+
+def _mirror_top_level_readme(workspace: Path, plugin_dest: Path) -> None:
+    """Copy the plugin's README to the repo root so GitHub renders it."""
+    plugin_readme = plugin_dest / "README.md"
+    if plugin_readme.exists():
+        shutil.copyfile(plugin_readme, workspace / "README.md")
 
 
 # ---------------------------------------------------------------------------

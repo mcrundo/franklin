@@ -119,8 +119,9 @@ uv run franklin run path/to/book.epub --publish
 # Try it locally before publishing
 uv run franklin install <run-dir> --scope local
 
-# Other users install from GitHub
-claude plugin add owner/repo
+# Other users install from GitHub (published as a single-plugin marketplace)
+claude plugin marketplace add owner/repo
+claude plugin install plugin-name@plugin-name
 ```
 
 `franklin publish` walks you through repo naming (editable default from the plugin name), owner selection (personal account or org, from `gh auth`), and visibility — then pushes and prints the install command.
