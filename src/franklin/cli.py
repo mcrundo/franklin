@@ -2689,6 +2689,11 @@ def pick_command(
     limit: int = typer.Option(
         100, "--limit", help="Maximum number of candidates to display", min=1, max=500
     ),
+    publish: bool = typer.Option(
+        False,
+        "--publish",
+        help="After pipeline completes, interactively publish to GitHub",
+    ),
 ) -> None:
     """Interactive picker for book files with run-state overlay.
 
@@ -2773,6 +2778,7 @@ def pick_command(
         branch="main",
         create_pr=False,
         public=False,
+        publish=publish,
     )
 
 

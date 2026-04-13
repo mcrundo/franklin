@@ -57,24 +57,32 @@ Use whichever fits your workflow. You do not need to configure anything in Frank
 ## The happy path
 
 ```bash
-# Pick a book interactively (scans ~/Books, ~/Media, ~/Downloads, ~/Documents
-# by default; override with --dir or FRANKLIN_BOOKS_DIR). Truncates long
-# titles, shows author + year, and marks anything you've already processed.
+# Zero-touch: book file → assembled + published plugin
+uv run franklin run path/to/book.epub --publish
+
+# Interactive: pick a book, preview costs, select chapters, then run
 uv run franklin pick
 
-# Or point directly at a file
-uv run franklin run path/to/book.epub
+# Pick and publish in one flow
+uv run franklin pick --publish
 
-# Curious what it'll cost first? Dry-run the estimator.
+# Just build, publish later
+uv run franklin run path/to/book.epub
+uv run franklin publish runs/<slug>
+
+# Curious what it'll cost first?
 uv run franklin run path/to/book.epub --estimate
 
-# Want a pause between plan and reduce to prune artifacts?
-uv run franklin run path/to/book.epub --review
+# Process a whole library at once
+uv run franklin batch book1.epub book2.epub book3.pdf --clean
 ```
 
-`franklin pick` runs ingest, then shows a **pre-map cost gate**: a per-stage cost table with a low-high range, then a **Proceed / Edit chapter selection / Cancel** prompt. "Edit" opens a multi-select where every content chapter is pre-checked — spacebar to skip the chapters you don't want to spend tokens on, Enter to commit. The selection persists across resumes via `map_selection.json`.
+The pipeline has two interactive gates that pause for confirmation:
 
-`franklin run` chains the five pipeline stages end-to-end (`ingest → map → plan → reduce → assemble`) and ends with a grade card plus a tailored "next steps" block. It's resume-safe: re-running over an existing run directory detects which stages are done and prompts to continue from the first incomplete one. Use `--force` to restart from scratch, `--yes` to auto-confirm prompts in scripts.
+- **Gate 1** (pre-map): shows a cost estimate with a low-high range, lets you edit the chapter selection (spacebar to toggle, Enter to commit). Persists via `map_selection.json`.
+- **Gate 2** (post-map, pre-plan): shows what the map extracted — per-chapter counts, cross-chapter concepts, top anti-patterns — so you can verify quality before the expensive Opus plan call.
+
+`franklin run` chains five stages end-to-end (`ingest → map → plan → reduce → assemble`) and is resume-safe: re-running picks up from the first incomplete stage. Use `--force` to restart, `--yes` to auto-confirm in scripts.
 
 ## Pipeline stages
 
