@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `franklin run` crashed during map and reduce stages with `TypeError: '<' not supported between instances of 'OptionInfo' and 'int'`. Typer `Option` defaults are `OptionInfo` objects that only resolve to real values through CLI parsing — calling the functions directly from `run_pipeline` leaked the unresolved objects. Standalone `franklin map` and `franklin reduce` were unaffected.
+
 ## [0.4.0] - 2026-04-12
 
 ### Added

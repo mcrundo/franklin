@@ -127,6 +127,7 @@ if [[ "$ACTION" == "tag" ]]; then
 What happens next (watch with \`gh run watch\`):
   1. publish.yml builds + uploads the sdist/wheel to PyPI
   2. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
+  3. merge the tap PR: https://github.com/mcrundo/homebrew-franklin/pulls
 EOF
     exit 0
 fi
@@ -333,6 +334,7 @@ EOF
 What happens next (watch with \`gh run watch\`):
   1. publish.yml builds + uploads the sdist/wheel to PyPI
   2. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
+  3. merge the tap PR: https://github.com/mcrundo/homebrew-franklin/pulls
 EOF
 
 else
