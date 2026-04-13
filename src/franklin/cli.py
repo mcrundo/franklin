@@ -2268,6 +2268,7 @@ def run_pipeline(
                 model=DEFAULT_MODEL,
                 dry_run=False,
                 force=force,
+                concurrency=_DEFAULT_MAP_CONCURRENCY,
             ),
         ),
         (
@@ -2287,6 +2288,7 @@ def run_pipeline(
                 type_filter=None,
                 model=REDUCER_DEFAULT_MODEL,
                 force=force,
+                concurrency=_DEFAULT_REDUCE_CONCURRENCY,
             ),
         ),
         ("assemble", lambda: assemble_pipeline(run_dir=run.root, zip_archive=False)),
