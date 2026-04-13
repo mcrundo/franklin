@@ -166,12 +166,44 @@ def _check_disk_space() -> CheckResult:
 # ---------------------------------------------------------------------------
 
 
+def _check_gh_auth() -> CheckResult:
+    """Check if the gh CLI is authenticated (needed for franklin publish/push)."""
+    import subprocess
+
+    gh = shutil.which("gh")
+    if not gh:
+        return CheckResult(
+            "GitHub CLI", CheckStatus.WARN, "gh not found — franklin publish requires it"
+        )
+    try:
+        result = subprocess.run(
+            [gh, "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            # Extract the account name from stderr (gh auth status prints there)
+            for line in result.stderr.splitlines():
+                if "Logged in" in line:
+                    return CheckResult("GitHub CLI", CheckStatus.OK, line.strip())
+            return CheckResult("GitHub CLI", CheckStatus.OK, "authenticated")
+        return CheckResult(
+            "GitHub CLI",
+            CheckStatus.WARN,
+            "not authenticated — run `gh auth login` before publishing",
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return CheckResult("GitHub CLI", CheckStatus.WARN, "could not check gh auth status")
+
+
 _DEFAULT_CHECKS: tuple[Callable[[], CheckResult], ...] = (
     _check_python_version,
     _check_uv_available,
     _check_api_key,
     _check_license,
     _check_claude_binary,
+    _check_gh_auth,
     _check_network_to_anthropic,
     _check_disk_space,
 )
