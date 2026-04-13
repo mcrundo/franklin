@@ -477,12 +477,14 @@ def ingest(
     _maybe_confirm_metadata(manifest, skip=yes)
 
     if clean:
-        chapters, cleanup_cost = _run_cleanup_pass(chapters, concurrency=clean_concurrency)
+        chapters, cl_in, cl_out, cleanup_cost = _run_cleanup_pass(
+            chapters, concurrency=clean_concurrency
+        )
         run.append_cost(
             stage="cleanup",
             model="claude-sonnet-4-6",
-            input_tokens=0,
-            output_tokens=0,
+            input_tokens=cl_in,
+            output_tokens=cl_out,
             cost_usd=cleanup_cost,
         )
         # Rebuild structure totals from the cleaned chapters so book.json reflects
@@ -510,7 +512,7 @@ def ingest(
 
 def _run_cleanup_pass(
     chapters: list[NormalizedChapter], *, concurrency: int
-) -> tuple[list[NormalizedChapter], float]:
+) -> tuple[list[NormalizedChapter], int, int, float]:
     """Invoke the Tier 4 LLM cleanup pass via the async pipeline.
 
     Drives ``clean_chapters_async`` via ``asyncio.run`` with a bounded
@@ -577,7 +579,7 @@ def _run_cleanup_pass(
             f"  [yellow]{len(failed_ids)} failures:[/yellow] "
             f"{', '.join(failed_ids)} — kept Tier 2 output for these"
         )
-    return cleaned, actual_cost
+    return cleaned, total_in, total_out, actual_cost
 
 
 def _print_pdf_warning() -> None:
@@ -1895,6 +1897,11 @@ def run_pipeline(
     public: bool = typer.Option(
         False, "--public", help="Create the repo as public (only with --push)"
     ),
+    publish: bool = typer.Option(
+        False,
+        "--publish",
+        help="After assemble, interactively publish to GitHub (guided: name, owner, visibility)",
+    ),
 ) -> None:
     """Run the full pipeline end-to-end: ingest → map → plan → reduce → assemble."""
     _validate_push_flags(push=push, repo=repo, branch=branch, create_pr=create_pr, public=public)
@@ -2030,7 +2037,12 @@ def run_pipeline(
 
     console.rule("[bold green]pipeline complete[/bold green]")
     console.print(f"[green]✓[/green] {run.root}")
-    _print_next_steps(run_dir=run.root, pushed=push, pushed_repo=repo)
+
+    if publish:
+        console.print()
+        publish_command(run_dir=run.root)
+    else:
+        _print_next_steps(run_dir=run.root, pushed=push, pushed_repo=repo)
 
 
 def _validate_push_flags(

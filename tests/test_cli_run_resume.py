@@ -94,6 +94,7 @@ def test_resume_detection_skipped_when_run_dir_missing(book_epub: Path, tmp_path
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     confirm.assert_not_called()
     assert mocks["ingest"].called
@@ -117,6 +118,7 @@ def test_resume_with_yes_flag_auto_confirms(book_epub: Path, tmp_path: Path) -> 
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     confirm.assert_not_called()
     assert mocks["assemble"].called
@@ -140,6 +142,7 @@ def test_resume_prompt_accepted_continues(book_epub: Path, tmp_path: Path) -> No
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     confirm.assert_called_once()
     assert mocks["assemble"].called
@@ -163,6 +166,7 @@ def test_resume_prompt_declined_aborts(book_epub: Path, tmp_path: Path) -> None:
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     assert exc.value.exit_code == 0
     assert not mocks["map"].called
@@ -187,6 +191,7 @@ def test_force_flag_skips_resume_prompt(book_epub: Path, tmp_path: Path) -> None
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     confirm.assert_not_called()
     assert mocks["ingest"].called
