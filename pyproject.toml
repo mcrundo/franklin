@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "franklin-book"
-version = "0.3.0"
+version = "0.4.0"
 description = "Turn technical books into Claude Code plugins using an Opus-advises, Sonnet-executes pipeline"
 readme = "README.md"
 license = "MIT"
