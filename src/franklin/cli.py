@@ -96,6 +96,9 @@ from franklin.schema import (
 )
 from franklin.secrets import MissingApiKeyError, ensure_anthropic_api_key
 
+_DEFAULT_MAP_CONCURRENCY = 8
+_DEFAULT_REDUCE_CONCURRENCY = 3
+
 app = typer.Typer(
     name="franklin",
     help="Turn technical books into Claude Code plugins.",
@@ -158,8 +161,34 @@ def _gate_pro_feature(feature: str, command: str) -> None:
 def _resolve_run_dir(book_path: Path, output: Path | None) -> RunDirectory:
     if output is not None:
         return RunDirectory(output)
-    slug = slugify(book_path.stem)
+    slug = _slug_from_metadata(book_path) or slugify(book_path.stem)
     return RunDirectory(Path.cwd() / "runs" / slug)
+
+
+def _slug_from_metadata(book_path: Path) -> str | None:
+    """Try to extract a clean title from book metadata for the slug."""
+    ext = book_path.suffix.lower()
+    title: str | None = None
+    if ext == ".epub":
+        from franklin.picker import _read_epub_opf_metadata
+
+        try:
+            meta = _read_epub_opf_metadata(book_path)
+            title = meta.get("title")
+        except Exception:
+            pass
+    elif ext == ".pdf":
+        try:
+            import pdfplumber
+
+            with pdfplumber.open(book_path) as pdf:
+                info = pdf.metadata or {}
+                title = info.get("Title") or info.get("title")
+        except Exception:
+            pass
+    if title and len(title.strip()) > 3:
+        return slugify(title)
+    return None
 
 
 @contextlib.contextmanager
@@ -679,6 +708,13 @@ def map_chapters(
     force: bool = typer.Option(
         False, "--force", help="Re-extract chapters that already have sidecars"
     ),
+    concurrency: int = typer.Option(
+        _DEFAULT_MAP_CONCURRENCY,
+        "--concurrency",
+        help="Number of concurrent LLM calls (default 8)",
+        min=1,
+        max=32,
+    ),
 ) -> None:
     """Run the map stage: per-chapter structured extraction via the LLM."""
     run = RunDirectory(run_dir)
@@ -703,7 +739,7 @@ def map_chapters(
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    _extract_all(run, manifest, targets, model=model, force=force)
+    _extract_all(run, manifest, targets, model=model, force=force, concurrency=concurrency)
 
 
 def _select_targets(
@@ -752,9 +788,6 @@ def _dry_run_prompt(run: RunDirectory, manifest: BookManifest, chapter: Normaliz
     console.print(f"  approx tokens: {len(prompt) // 4:,}")
     console.print()
     console.print(prompt)
-
-
-_DEFAULT_MAP_CONCURRENCY = 8
 
 
 def _extract_all(
@@ -892,7 +925,12 @@ def plan_pipeline(
         f"[bold]Designing plugin[/bold] for [cyan]{manifest.metadata.title}[/cyan] "
         f"from {len(sidecars)} sidecars using [dim]{model}[/dim]"
     )
-    plan, in_toks, out_toks = design_plan(manifest, sidecars, model=model)
+    from rich.live import Live
+    from rich.spinner import Spinner
+
+    spinner = Spinner("aesthetic", text=" [dim]thinking...[/dim]")
+    with Live(spinner, console=console, refresh_per_second=10, transient=True):
+        plan, in_toks, out_toks = design_plan(manifest, sidecars, model=model)
     run.save_plan(plan)
 
     from franklin.estimate import _opus_cost
@@ -996,6 +1034,13 @@ def reduce_pipeline(
     force: bool = typer.Option(
         False, "--force", help="Regenerate artifacts whose output file already exists"
     ),
+    concurrency: int = typer.Option(
+        _DEFAULT_REDUCE_CONCURRENCY,
+        "--concurrency",
+        help="Number of concurrent LLM calls (default 3, lower preserves prompt cache)",
+        min=1,
+        max=16,
+    ),
 ) -> None:
     """Generate each artifact file from the plan using its feeds_from slice."""
     run = RunDirectory(run_dir)
@@ -1032,6 +1077,7 @@ def reduce_pipeline(
         targets=targets,
         model=model,
         force=force,
+        concurrency=concurrency,
     )
 
 
@@ -1062,9 +1108,6 @@ def _select_artifacts(
         return [a for a in plan.artifacts if a.type == kind]
 
     return list(plan.artifacts)
-
-
-_DEFAULT_REDUCE_CONCURRENCY = 3
 
 
 def _generate_artifacts(

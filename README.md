@@ -38,7 +38,7 @@ Franklin is a Python 3.12+ package managed with `uv`.
 uv run franklin doctor
 ```
 
-`franklin doctor` is a preflight: it verifies your Python version, `uv` and `claude` binaries, Anthropic API key resolution, license state, network reachability to `api.anthropic.com`, and available disk space. Run it once after install to catch setup issues before your first paid run. `--skip-network` for air-gapped environments, `--json` for support tooling.
+`franklin doctor` is a preflight: it verifies your Python version, `uv` and `claude` binaries, Anthropic API key, `gh` authentication (needed for publishing), license state, network reachability, and disk space. Run it once after install to catch setup issues before your first paid run. `--skip-network` for air-gapped environments, `--json` for support tooling.
 
 ## Anthropic API key
 
@@ -89,9 +89,9 @@ The pipeline has two interactive gates that pause for confirmation:
 Every stage can be run on its own, reads from disk, and writes to disk — so you can replay just one stage when you change a prompt or want to inspect intermediate state.
 
 1. **ingest** (`franklin ingest <book>`) — parse EPUB/PDF into normalized chapter JSON. Deterministic, no LLM calls. PDFs get an optional Tier 4 LLM cleanup pass via `--clean` that fixes extraction artifacts concurrently with a live progress bar.
-2. **map** (`franklin map <run-dir>`) — per-chapter structured extraction. One LLM call per chapter produces a sidecar with concepts, rules, anti-patterns, and workflows.
-3. **plan** (`franklin plan <run-dir>`) — design the plugin architecture from the distilled sidecars (one call).
-4. **reduce** (`franklin reduce <run-dir>`) — generate each artifact file from the plan. This is the most expensive stage.
+2. **map** (`franklin map <run-dir>`) — per-chapter structured extraction. Runs concurrently (default 8 in-flight, tunable with `--concurrency`). One LLM call per chapter produces a sidecar with concepts, rules, anti-patterns, and workflows.
+3. **plan** (`franklin plan <run-dir>`) — design the plugin architecture from the distilled sidecars (one Opus call).
+4. **reduce** (`franklin reduce <run-dir>`) — generate each artifact file from the plan. Runs concurrently (default 3, tunable with `--concurrency`). This is the most expensive stage.
 5. **assemble** (`franklin assemble <run-dir>`) — write `plugin.json` and `README.md`, run link/frontmatter/template validators, and compute the grade card. The generated README is GitHub-ready with install instructions, commands table, and reference index.
 
 ## Iteration tools
@@ -104,6 +104,7 @@ Every stage can be run on its own, reads from disk, and writes to disk — so yo
 - **`franklin runs list`** — table of every run directory with slug, title, date, last completed stage, and grade.
 - **`franklin review <run-dir>`** — interactive pruning of the planned artifact list before reduce.
 - **`franklin inspect <run-dir>`** — preview the ingest output before committing to the paid stages.
+- **`franklin stats`** — aggregate overview: total books, completion rates, average grade, total cost.
 - **`franklin reduce <run-dir> --artifact <id> --force`** — regenerate one artifact.
 
 ## Publishing and installing
@@ -150,7 +151,8 @@ The tradeoff is that Opus's advisory call is a single point of failure: if the p
 
 - **`franklin run --estimate`** predicts per-stage token counts and dollar cost before any paid calls. Displayed as a `$low - $high` range — a budget ceiling, not a prediction. Real costs are typically 30–50% below the high end thanks to prompt caching.
 - **`franklin pick` shows the same estimate** as a pre-map gate so you can deselect chapters before paying for them.
-- **Concurrent stages.** Map, reduce, and cleanup all run concurrently via `AsyncAnthropic` with bounded semaphores. A 26-chapter PDF goes from ingest to assembled plugin in ~20 minutes.
+- **Concurrent stages.** Map, reduce, and cleanup all run concurrently via `AsyncAnthropic` with bounded semaphores (`--concurrency` flag on map and reduce to tune). A 26-chapter PDF goes from ingest to assembled plugin in ~20 minutes.
+- **Auto-clean for PDFs.** When you run a PDF without `--clean`, franklin asks whether to enable cleanup for better extraction quality.
 - **Resume-on-disk** means a flaky network or a burned credit card never costs you more than the calls that were in flight. Re-run the same command; Franklin picks up from `book.json`, `chapters/`, `plan.json`, or `output/` depending on what already exists.
 - **Per-chapter failures are non-fatal** during cleanup and map; the original output is kept and reported in the summary.
 - **LLM drift is tolerated**, not fatal. If a tool-use response slips a stray field onto a sub-object, the validator strips it and logs a warning instead of killing the whole stage. Missing required fields and type errors still raise.
@@ -170,6 +172,7 @@ runs/<slug>/
     commands/*.md
     agents/*.md
   metrics.json           # Grade card output from assemble
+  costs.json             # Per-stage API spend (JSONL, appended by each stage)
 ```
 
 ## Configuration

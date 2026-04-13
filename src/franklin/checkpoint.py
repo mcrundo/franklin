@@ -316,8 +316,22 @@ def list_runs(base: Path) -> list[RunSummary]:
     return summaries
 
 
+_MAX_SLUG_LENGTH = 60
+
+
 def slugify(value: str) -> str:
-    """Make a filesystem-safe slug from a book title or filename."""
+    """Make a filesystem-safe slug from a book title or filename.
+
+    Caps at 60 chars, truncating at a word boundary to avoid
+    the 173-char slugs that PDF filenames with metadata produce.
+    """
     value = value.lower().strip()
     value = re.sub(r"[^a-z0-9]+", "-", value)
-    return value.strip("-") or "book"
+    value = value.strip("-") or "book"
+    if len(value) <= _MAX_SLUG_LENGTH:
+        return value
+    truncated = value[:_MAX_SLUG_LENGTH]
+    last_sep = truncated.rfind("-")
+    if last_sep > 20:
+        truncated = truncated[:last_sep]
+    return truncated.strip("-")
