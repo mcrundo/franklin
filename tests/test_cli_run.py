@@ -166,6 +166,7 @@ def test_run_rejects_push_without_repo(
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     assert exc_info.value.exit_code == 2
     captured = capsys.readouterr()
@@ -189,6 +190,7 @@ def test_run_rejects_repo_without_push(
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
     assert exc_info.value.exit_code == 2
     captured = capsys.readouterr()
@@ -211,6 +213,7 @@ def test_run_rejects_pr_without_push(book_epub: Path, capsys: pytest.CaptureFixt
             branch="main",
             create_pr=True,
             public=False,
+            publish=False,
         )
     captured = capsys.readouterr()
     assert "--pr" in captured.out
@@ -255,6 +258,7 @@ def test_run_rejects_branch_without_push(
             branch="feature-x",
             create_pr=False,
             public=False,
+            publish=False,
         )
     captured = capsys.readouterr()
     assert "--branch" in captured.out
@@ -287,6 +291,7 @@ def test_run_with_push_chains_all_stages(
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
 
     for name in ("ingest", "map", "plan", "reduce", "assemble", "push"):
@@ -319,6 +324,7 @@ def test_run_without_push_does_not_invoke_push(
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
 
     for name in ("ingest", "map", "plan", "reduce", "assemble"):
@@ -348,6 +354,7 @@ def test_run_with_push_propagates_branch_and_pr_and_public(
             branch="franklin/update",
             create_pr=True,
             public=True,
+            publish=False,
         )
 
     push_kwargs = stage_mocks["push"].call_args.kwargs
@@ -408,6 +415,7 @@ def test_run_push_surfaces_license_gate_error_after_assembly(
             branch="main",
             create_pr=False,
             public=False,
+            publish=False,
         )
 
     # The gate blocked the push before any real publishing work happened.

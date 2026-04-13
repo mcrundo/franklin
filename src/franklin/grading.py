@@ -281,6 +281,37 @@ def _has_allowed_tools(text: str, _: Path) -> bool:
     return "allowed-tools" in fm or "allowed_tools" in fm
 
 
+def _has_structured_checklist(text: str, _: Path) -> bool:
+    """Agent reviewer: checks for a | Check | Signal | Severity | table."""
+    lower = text.lower()
+    return "| check" in lower and "| severity" in lower
+
+
+def _has_severity_tiers(text: str, _: Path) -> bool:
+    """Agent reviewer: checks for severity tier definitions."""
+    lower = text.lower()
+    return "critical" in lower and "high" in lower and "medium" in lower
+
+
+def _has_fix_these_first(text: str, _: Path) -> bool:
+    """Agent reviewer: checks for a 'Fix these first' section in output format."""
+    lower = text.lower()
+    return "fix these first" in lower or "fix first" in lower
+
+
+def _has_output_format(text: str, _: Path) -> bool:
+    return "## output format" in text.lower() or "## output" in text.lower()
+
+
+def _command_description_short(text: str, _: Path) -> bool:
+    """Command frontmatter description should be under 80 chars."""
+    fm = _parse_frontmatter(text)
+    desc = fm.get("description", "")
+    if not isinstance(desc, str):
+        return False
+    return len(desc.strip()) <= 80
+
+
 _RUBRICS: dict[ArtifactType, list[tuple[str, ArtifactChecker]]] = {
     ArtifactType.REFERENCE: [
         ("has H1 heading", _has_h1),
@@ -292,6 +323,7 @@ _RUBRICS: dict[ArtifactType, list[tuple[str, ArtifactChecker]]] = {
     ],
     ArtifactType.COMMAND: [
         ("has frontmatter description", _has_frontmatter_description),
+        ("description under 80 chars", _command_description_short),
         ("has steps section", _has_steps_section),
         ("uses imperative voice", _has_imperative_voice),
         ("has 'Verify' section", _has_verify_section),
@@ -303,6 +335,10 @@ _RUBRICS: dict[ArtifactType, list[tuple[str, ArtifactChecker]]] = {
         ("has 'Role' section", _has_role_section),
         ("has 'Principles' section", _has_principles_section),
         ("has 'Procedure' section", _has_procedure_section),
+        ("has structured checklist table", _has_structured_checklist),
+        ("has severity tiers", _has_severity_tiers),
+        ("has 'Fix these first' guidance", _has_fix_these_first),
+        ("has 'Output format' section", _has_output_format),
         ("output format examples use backticks", _output_format_examples_use_backticks),
     ],
     ArtifactType.SKILL: [
