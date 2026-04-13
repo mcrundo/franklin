@@ -1570,6 +1570,187 @@ def _print_detailed_grade_report(grade: RunGrade, *, plan_name: str) -> None:
         console.print(f"[red]Failed stages:[/red] {', '.join(grade.failed_stages)}")
 
 
+@app.command(name="diff")
+def diff_command(
+    run_a: Path = typer.Argument(..., exists=True, file_okay=False, help="First run directory"),
+    run_b: Path = typer.Argument(..., exists=True, file_okay=False, help="Second run directory"),
+) -> None:
+    """Compare two runs side-by-side: grade delta, per-artifact score changes.
+
+    Useful for evaluating the impact of prompt improvements, chapter
+    selection changes, or force-regenerated artifacts. Both runs must
+    have been assembled (metrics.json present).
+    """
+    grade_a = grade_run(run_a)
+    grade_b = grade_run(run_b)
+
+    # Header
+    console.rule("[bold]Run comparison[/bold]")
+    console.print(f"  [dim]A:[/dim] {run_a}")
+    console.print(f"  [dim]B:[/dim] {run_b}")
+    console.print()
+
+    # Overall grade delta
+    delta = grade_b.composite_score - grade_a.composite_score
+    direction = "[green]+[/green]" if delta > 0 else "[red][/red]" if delta < 0 else "="
+    console.print(
+        f"  Grade:  {grade_a.letter} ({grade_a.composite_score:.2f}) "
+        f"-> {grade_b.letter} ({grade_b.composite_score:.2f})  "
+        f"{direction}{abs(delta):.2f}"
+    )
+    console.print(
+        f"  Struct: {grade_a.structural_average:.2f} -> {grade_b.structural_average:.2f}"
+    )
+    console.print()
+
+    # Per-artifact comparison
+    scores_a = {g.path: g for g in grade_a.artifact_grades}
+    scores_b = {g.path: g for g in grade_b.artifact_grades}
+    all_paths = sorted(set(scores_a.keys()) | set(scores_b.keys()))
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Artifact", style="cyan", overflow="fold")
+    table.add_column("A", justify="center")
+    table.add_column("B", justify="center")
+    table.add_column("Delta", justify="right")
+    table.add_column("Notes", style="dim")
+
+    improved = 0
+    regressed = 0
+    unchanged = 0
+
+    for path in all_paths:
+        ga = scores_a.get(path)
+        gb = scores_b.get(path)
+
+        if ga and gb:
+            d = gb.score - ga.score
+            if abs(d) < 0.01:
+                unchanged += 1
+                continue  # skip unchanged in table
+            if d > 0:
+                improved += 1
+                delta_str = f"[green]+{d:.2f}[/green]"
+            else:
+                regressed += 1
+                delta_str = f"[red]{d:.2f}[/red]"
+
+            # What checks changed?
+            failed_a = set(ga.failed_checks)
+            failed_b = set(gb.failed_checks)
+            fixed = failed_a - failed_b
+            broken = failed_b - failed_a
+            notes_parts: list[str] = []
+            if fixed:
+                notes_parts.append(f"fixed: {', '.join(sorted(fixed))}")
+            if broken:
+                notes_parts.append(f"regressed: {', '.join(sorted(broken))}")
+
+            table.add_row(path, ga.letter, gb.letter, delta_str, "; ".join(notes_parts))
+        elif ga and not gb:
+            table.add_row(path, ga.letter, "—", "", "removed in B")
+        elif gb and not ga:
+            table.add_row(path, "—", gb.letter, "", "new in B")
+
+    if improved + regressed > 0:
+        console.print(table)
+    console.print()
+    console.print(
+        f"  [green]{improved} improved[/green]  "
+        f"[red]{regressed} regressed[/red]  "
+        f"[dim]{unchanged} unchanged[/dim]"
+    )
+
+    # Content size comparison
+    run_a_dir = RunDirectory(run_a)
+    run_b_dir = RunDirectory(run_b)
+    if run_a_dir.plan_json.exists() and run_b_dir.plan_json.exists():
+        plan_a = run_a_dir.load_plan()
+        plan_b = run_b_dir.load_plan()
+        root_a = run_a_dir.output_dir / plan_a.plugin.name
+        root_b = run_b_dir.output_dir / plan_b.plugin.name
+        if root_a.exists() and root_b.exists():
+            size_a = sum(f.stat().st_size for f in root_a.rglob("*.md"))
+            size_b = sum(f.stat().st_size for f in root_b.rglob("*.md"))
+            console.print(
+                f"  Content: {size_a // 1024}KB -> {size_b // 1024}KB "
+                f"({'+' if size_b >= size_a else ''}{(size_b - size_a) // 1024}KB)"
+            )
+
+    # Cost comparison
+    costs_a = run_a_dir.load_costs()
+    costs_b = run_b_dir.load_costs()
+    if costs_a or costs_b:
+        cost_a = sum(float(str(e.get("cost_usd", 0))) for e in costs_a)
+        cost_b = sum(float(str(e.get("cost_usd", 0))) for e in costs_b)
+        if cost_a > 0 or cost_b > 0:
+            console.print(f"  Cost:    ${cost_a:.2f} -> ${cost_b:.2f}")
+    console.print()
+
+
+@app.command(name="validate")
+def validate_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory to validate"
+    ),
+) -> None:
+    """Quick quality check on generated artifacts without re-grading.
+
+    Reads each artifact file and checks for common prompt-compliance
+    issues: references missing problem framing, commands with long
+    descriptions, agents without structured checklists. Faster than
+    ``franklin grade`` and more targeted than ``franklin fix`` — useful
+    as a sanity check before publishing.
+    """
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir}")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(f"[red]error:[/red] no plugin at {plugin_root}")
+        raise typer.Exit(code=1)
+
+    from franklin.grading import _RUBRICS
+
+    issues: list[tuple[str, str, list[str]]] = []
+
+    for artifact in plan.artifacts:
+        path = plugin_root / artifact.path
+        if not path.exists():
+            issues.append((artifact.path, artifact.type.value, ["file missing"]))
+            continue
+
+        rubric = _RUBRICS.get(artifact.type, [])
+        if not rubric:
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        failed = [name for name, fn in rubric if not fn(text, path)]
+        if failed:
+            issues.append((artifact.path, artifact.type.value, failed))
+
+    if not issues:
+        console.print(f"[green]✓[/green] All {len(plan.artifacts)} artifacts pass validation.")
+        return
+
+    console.rule("[bold yellow]Validation issues[/bold yellow]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Artifact", style="cyan", overflow="fold")
+    table.add_column("Type", style="dim")
+    table.add_column("Failed checks")
+    for path_str, art_type, failed in issues:
+        table.add_row(path_str, art_type, ", ".join(failed))
+    console.print(table)
+    console.print()
+    console.print(
+        f"  {len(issues)} artifact(s) with issues. "
+        f"Run [cyan]franklin fix {run_dir}[/cyan] to regenerate."
+    )
+
+
 _FIX_SCORE_THRESHOLD = 0.83  # below B
 
 
@@ -1850,6 +2031,64 @@ def _render_single_chapter(report: InspectReport, chapter_id: str) -> None:
         console.rule("[bold yellow]Anomalies[/bold yellow]")
         for anomaly in target.anomalies:
             console.print(f"  [yellow]⚠ {anomaly.kind}:[/yellow] {anomaly.message}")
+
+
+@app.command(name="batch")
+def batch_command(
+    books: list[Path] = typer.Argument(
+        ..., exists=True, readable=True, help="Book files to process"
+    ),
+    clean: bool = typer.Option(False, "--clean", help="Run Tier 4 LLM cleanup for PDFs"),
+) -> None:
+    """Process multiple books end-to-end, one after another.
+
+    Runs the full pipeline (ingest -> map -> plan -> reduce -> assemble)
+    for each book with all interactive gates auto-confirmed. Results are
+    printed as a summary table at the end.
+
+    Each book gets its own run directory under ./runs/<slug>.
+    """
+    results: list[tuple[str, str, str]] = []
+
+    for i, book_path in enumerate(books, start=1):
+        console.rule(f"[bold]Book {i}/{len(books)}: {book_path.name}[/bold]")
+        console.print()
+
+        try:
+            is_pdf = book_path.suffix.lower() == ".pdf"
+            run_pipeline(
+                book_path=book_path,
+                output=None,
+                force=False,
+                yes=True,
+                estimate=False,
+                review=False,
+                clean=clean and is_pdf,
+                push=False,
+                repo=None,
+                branch="main",
+                create_pr=False,
+                public=False,
+                publish=False,
+            )
+            run = _resolve_run_dir(book_path, None)
+            grade = grade_run(run.root)
+            cost = sum(float(str(e.get("cost_usd", 0))) for e in run.load_costs())
+            results.append((book_path.name, grade.letter, f"${cost:.2f}"))
+        except (typer.Exit, Exception) as exc:
+            results.append((book_path.name, "FAIL", str(exc)[:40]))
+            console.print(f"[red]✗ {book_path.name} failed: {exc}[/red]")
+        console.print()
+
+    # Summary table
+    console.rule("[bold]Batch summary[/bold]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Book", style="cyan")
+    table.add_column("Grade", justify="center")
+    table.add_column("Cost")
+    for name, grade_letter, cost_or_err in results:
+        table.add_row(name, grade_letter, cost_or_err)
+    console.print(table)
 
 
 @app.command(name="run")

@@ -88,32 +88,43 @@ Every stage can be run on its own, reads from disk, and writes to disk — so yo
 
 ## Iteration tools
 
-- **`franklin runs list`** — table of every run directory under `./runs/` with slug, title, date, last completed stage, artifact count, and grade.
+- **`franklin fix <run-dir>`** — interactive re-grade loop. Shows artifacts below B, offers to regenerate all or pick specific ones, re-runs reduce + assemble, shows the new grade. Loops until you're satisfied.
+- **`franklin validate <run-dir>`** — quick quality check without re-grading. Catches common prompt-compliance issues (missing problem framing, long command descriptions, agents without checklists).
+- **`franklin diff <run-a> <run-b>`** — compare two runs side-by-side: grade delta, per-artifact score changes, which checks fixed or regressed, content size and cost comparison.
 - **`franklin grade <run-dir>`** — detailed per-artifact grade report with structural rubric scores, lowest-grade artifacts, and suggested regeneration commands. `--json` for machine output.
-- **`franklin review <run-dir>`** — interactive pruning of the planned artifact list. Show the plan, omit artifacts you don't want to pay to generate, save a reduced `plan.json`. Supports index ranges like `1,3-5`.
-- **`franklin inspect <run-dir>`** — preview the ingest output (chapters, code blocks, anomalies) before committing to the paid stages.
-- **`franklin reduce <run-dir> --artifact <id> --force`** — regenerate one artifact after editing a prompt or fixing a sidecar.
+- **`franklin costs`** — actual API spend across all runs with per-run and per-stage breakdown.
+- **`franklin runs list`** — table of every run directory with slug, title, date, last completed stage, and grade.
+- **`franklin review <run-dir>`** — interactive pruning of the planned artifact list before reduce.
+- **`franklin inspect <run-dir>`** — preview the ingest output before committing to the paid stages.
+- **`franklin reduce <run-dir> --artifact <id> --force`** — regenerate one artifact.
 
 ## Publishing and installing
 
-Once a run is assembled and you're happy with the grade:
-
 ```bash
-# Try it locally before publishing (ephemeral, per-session)
+# Interactive publish: grade check, fix low artifacts, pick repo name + owner
+uv run franklin publish <run-dir>
+
+# Or do it all in one shot from a book file
+uv run franklin run path/to/book.epub --publish
+
+# Try it locally before publishing
 uv run franklin install <run-dir> --scope local
 
-# Or persist it to your user scope (every Claude Code session)
-uv run franklin install <run-dir> --scope user
-
-# Or scope it to the current project (committed to .claude/settings.json)
-uv run franklin install <run-dir> --scope project
-
-# When ready to share, push to a GitHub repo
-uv run franklin push <run-dir> --repo owner/name
-
-# Other users (and you, after publishing) install from GitHub
-claude plugin install owner/name
+# Other users install from GitHub
+claude plugin add owner/repo
 ```
+
+`franklin publish` walks you through repo naming (editable default from the plugin name), owner selection (personal account or org, from `gh auth`), and visibility — then pushes and prints the install command.
+
+### Batch processing
+
+Process multiple books at once:
+
+```bash
+uv run franklin batch book1.epub book2.epub book3.pdf --clean
+```
+
+Each book gets its own run directory. All gates are auto-confirmed. A summary table with grades and costs is printed at the end.
 
 ## Advisor strategy (Opus advises, Sonnet executes)
 
