@@ -57,24 +57,32 @@ Use whichever fits your workflow. You do not need to configure anything in Frank
 ## The happy path
 
 ```bash
-# Pick a book interactively (scans ~/Books, ~/Media, ~/Downloads, ~/Documents
-# by default; override with --dir or FRANKLIN_BOOKS_DIR). Truncates long
-# titles, shows author + year, and marks anything you've already processed.
+# Zero-touch: book file → assembled + published plugin
+uv run franklin run path/to/book.epub --publish
+
+# Interactive: pick a book, preview costs, select chapters, then run
 uv run franklin pick
 
-# Or point directly at a file
-uv run franklin run path/to/book.epub
+# Pick and publish in one flow
+uv run franklin pick --publish
 
-# Curious what it'll cost first? Dry-run the estimator.
+# Just build, publish later
+uv run franklin run path/to/book.epub
+uv run franklin publish runs/<slug>
+
+# Curious what it'll cost first?
 uv run franklin run path/to/book.epub --estimate
 
-# Want a pause between plan and reduce to prune artifacts?
-uv run franklin run path/to/book.epub --review
+# Process a whole library at once
+uv run franklin batch book1.epub book2.epub book3.pdf --clean
 ```
 
-`franklin pick` runs ingest, then shows a **pre-map cost gate**: a per-stage cost table with a low-high range, then a **Proceed / Edit chapter selection / Cancel** prompt. "Edit" opens a multi-select where every content chapter is pre-checked — spacebar to skip the chapters you don't want to spend tokens on, Enter to commit. The selection persists across resumes via `map_selection.json`.
+The pipeline has two interactive gates that pause for confirmation:
 
-`franklin run` chains the five pipeline stages end-to-end (`ingest → map → plan → reduce → assemble`) and ends with a grade card plus a tailored "next steps" block. It's resume-safe: re-running over an existing run directory detects which stages are done and prompts to continue from the first incomplete one. Use `--force` to restart from scratch, `--yes` to auto-confirm prompts in scripts.
+- **Gate 1** (pre-map): shows a cost estimate with a low-high range, lets you edit the chapter selection (spacebar to toggle, Enter to commit). Persists via `map_selection.json`.
+- **Gate 2** (post-map, pre-plan): shows what the map extracted — per-chapter counts, cross-chapter concepts, top anti-patterns — so you can verify quality before the expensive Opus plan call.
+
+`franklin run` chains five stages end-to-end (`ingest → map → plan → reduce → assemble`) and is resume-safe: re-running picks up from the first incomplete stage. Use `--force` to restart, `--yes` to auto-confirm in scripts.
 
 ## Pipeline stages
 
@@ -88,32 +96,43 @@ Every stage can be run on its own, reads from disk, and writes to disk — so yo
 
 ## Iteration tools
 
-- **`franklin runs list`** — table of every run directory under `./runs/` with slug, title, date, last completed stage, artifact count, and grade.
+- **`franklin fix <run-dir>`** — interactive re-grade loop. Shows artifacts below B, offers to regenerate all or pick specific ones, re-runs reduce + assemble, shows the new grade. Loops until you're satisfied.
+- **`franklin validate <run-dir>`** — quick quality check without re-grading. Catches common prompt-compliance issues (missing problem framing, long command descriptions, agents without checklists).
+- **`franklin diff <run-a> <run-b>`** — compare two runs side-by-side: grade delta, per-artifact score changes, which checks fixed or regressed, content size and cost comparison.
 - **`franklin grade <run-dir>`** — detailed per-artifact grade report with structural rubric scores, lowest-grade artifacts, and suggested regeneration commands. `--json` for machine output.
-- **`franklin review <run-dir>`** — interactive pruning of the planned artifact list. Show the plan, omit artifacts you don't want to pay to generate, save a reduced `plan.json`. Supports index ranges like `1,3-5`.
-- **`franklin inspect <run-dir>`** — preview the ingest output (chapters, code blocks, anomalies) before committing to the paid stages.
-- **`franklin reduce <run-dir> --artifact <id> --force`** — regenerate one artifact after editing a prompt or fixing a sidecar.
+- **`franklin costs`** — actual API spend across all runs with per-run and per-stage breakdown.
+- **`franklin runs list`** — table of every run directory with slug, title, date, last completed stage, and grade.
+- **`franklin review <run-dir>`** — interactive pruning of the planned artifact list before reduce.
+- **`franklin inspect <run-dir>`** — preview the ingest output before committing to the paid stages.
+- **`franklin reduce <run-dir> --artifact <id> --force`** — regenerate one artifact.
 
 ## Publishing and installing
 
-Once a run is assembled and you're happy with the grade:
-
 ```bash
-# Try it locally before publishing (ephemeral, per-session)
+# Interactive publish: grade check, fix low artifacts, pick repo name + owner
+uv run franklin publish <run-dir>
+
+# Or do it all in one shot from a book file
+uv run franklin run path/to/book.epub --publish
+
+# Try it locally before publishing
 uv run franklin install <run-dir> --scope local
 
-# Or persist it to your user scope (every Claude Code session)
-uv run franklin install <run-dir> --scope user
-
-# Or scope it to the current project (committed to .claude/settings.json)
-uv run franklin install <run-dir> --scope project
-
-# When ready to share, push to a GitHub repo
-uv run franklin push <run-dir> --repo owner/name
-
-# Other users (and you, after publishing) install from GitHub
-claude plugin install owner/name
+# Other users install from GitHub
+claude plugin add owner/repo
 ```
+
+`franklin publish` walks you through repo naming (editable default from the plugin name), owner selection (personal account or org, from `gh auth`), and visibility — then pushes and prints the install command.
+
+### Batch processing
+
+Process multiple books at once:
+
+```bash
+uv run franklin batch book1.epub book2.epub book3.pdf --clean
+```
+
+Each book gets its own run directory. All gates are auto-confirmed. A summary table with grades and costs is printed at the end.
 
 ## Advisor strategy (Opus advises, Sonnet executes)
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -96,12 +97,34 @@ def push_plugin(
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_stderr(stderr: str) -> str:
+    """Strip credentials and tokens from subprocess stderr before logging."""
+    cleaned = stderr.strip()
+    # Remove anything that looks like a token or credential
+    cleaned = re.sub(r"(ghp_|gho_|github_pat_)[A-Za-z0-9_]+", "***", cleaned)
+    cleaned = re.sub(
+        r"(token|password|secret|credential)s?\s*[:=]\s*\S+",
+        r"\1: ***",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned
+
+
+_REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+
+
 def _parse_repo(repo: str) -> tuple[str, str]:
     if repo.count("/") != 1:
         raise PushError(f"--repo must be of the form owner/name (got {repo!r})")
     owner, name = repo.split("/", 1)
     if not owner or not name:
         raise PushError(f"--repo must be of the form owner/name (got {repo!r})")
+    if not _REPO_NAME_RE.match(owner) or not _REPO_NAME_RE.match(name):
+        raise PushError(
+            f"--repo owner and name must be alphanumeric with hyphens/dots/underscores "
+            f"(got {repo!r})"
+        )
     return owner, name
 
 
@@ -156,7 +179,7 @@ def _create_repo(owner: str, name: str, *, private: bool, backend: str) -> None:
         ]
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         if result.returncode != 0:
-            raise PushError(f"gh repo create failed: {result.stderr.strip()}")
+            raise PushError(f"gh repo create failed: {_sanitize_stderr(result.stderr)}")
         return
 
     _github_request(
@@ -240,7 +263,7 @@ def _git(
     if check and result.returncode != 0:
         raise PushError(
             f"git {' '.join(args)} failed (exit {result.returncode}): "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+            f"{_sanitize_stderr(result.stderr) or result.stdout.strip()}"
         )
     return result.stdout
 
@@ -281,7 +304,7 @@ def _create_pr(
             check=False,
         )
         if result.returncode != 0:
-            raise PushError(f"gh pr create failed: {result.stderr.strip()}")
+            raise PushError(f"gh pr create failed: {_sanitize_stderr(result.stderr)}")
         return result.stdout.strip()
 
     response = _github_request(
