@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-13
+
 ### Fixed
 
 - `franklin run` crashed during map and reduce stages with `TypeError: '<' not supported between instances of 'OptionInfo' and 'int'`. Typer `Option` defaults are `OptionInfo` objects that only resolve to real values through CLI parsing — calling the functions directly from `run_pipeline` leaked the unresolved objects. Standalone `franklin map` and `franklin reduce` were unaffected.
@@ -154,7 +156,8 @@ First public release.
 #### License infrastructure (disabled in v0.1)
 - RS256 JWT license module (`franklin license {login, logout, whoami, status}`) with offline grace window, cached revocations, and bypass env var. Gate code is wired but disabled via `_LICENSE_GATE_ENABLED = False` so v0.1 ships fully free. The flag stays in place for a future paid tier.
 
-[Unreleased]: https://github.com/mcrundo/franklin/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mcrundo/franklin/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/mcrundo/franklin/releases/tag/v0.4.1
 [0.4.0]: https://github.com/mcrundo/franklin/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mcrundo/franklin/releases/tag/v0.3.0
 [0.2.1]: https://github.com/mcrundo/franklin/releases/tag/v0.2.1
