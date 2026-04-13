@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,20 @@ from franklin.publisher import (
     _remote_url,
     push_plugin,
 )
+
+
+def _make_plugin_tree(tmp_path: Path, name: str = "p") -> Path:
+    """Create a minimal assembled-plugin tree with plugin.json + README."""
+    plugin_root = tmp_path / name
+    plugin_root.mkdir()
+    (plugin_root / ".claude-plugin").mkdir()
+    (plugin_root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": name, "version": "0.1.0", "description": "test plugin"})
+    )
+    (plugin_root / "SKILL.md").write_text("# Skill\n")
+    (plugin_root / "README.md").write_text("# plugin readme\n")
+    return plugin_root
+
 
 # ---------------------------------------------------------------------------
 # Repo parsing
@@ -152,8 +167,7 @@ def test_push_plugin_requires_existing_plugin_root(tmp_path: Path) -> None:
 
 
 def test_push_plugin_rejects_pr_flag_on_main_branch(tmp_path: Path) -> None:
-    plugin_root = tmp_path / "p"
-    plugin_root.mkdir()
+    plugin_root = _make_plugin_tree(tmp_path)
     with pytest.raises(PushError, match="--pr requires --branch"):
         push_plugin(
             plugin_root,
@@ -165,9 +179,7 @@ def test_push_plugin_rejects_pr_flag_on_main_branch(tmp_path: Path) -> None:
 
 
 def test_push_plugin_gh_backend_skips_create_when_repo_exists(tmp_path: Path) -> None:
-    plugin_root = tmp_path / "p"
-    plugin_root.mkdir()
-    (plugin_root / "SKILL.md").write_text("# Skill\n")
+    plugin_root = _make_plugin_tree(tmp_path)
 
     commands: list[list[str]] = []
     with (
@@ -201,9 +213,7 @@ def test_push_plugin_gh_backend_skips_create_when_repo_exists(tmp_path: Path) ->
 
 
 def test_push_plugin_gh_backend_creates_missing_repo(tmp_path: Path) -> None:
-    plugin_root = tmp_path / "p"
-    plugin_root.mkdir()
-    (plugin_root / "SKILL.md").write_text("# Skill\n")
+    plugin_root = _make_plugin_tree(tmp_path)
 
     commands: list[list[str]] = []
     with (
@@ -228,9 +238,7 @@ def test_push_plugin_gh_backend_creates_missing_repo(tmp_path: Path) -> None:
 
 
 def test_push_plugin_gh_backend_defaults_to_private(tmp_path: Path) -> None:
-    plugin_root = tmp_path / "p"
-    plugin_root.mkdir()
-    (plugin_root / "SKILL.md").write_text("# Skill\n")
+    plugin_root = _make_plugin_tree(tmp_path)
 
     commands: list[list[str]] = []
     with (
@@ -254,9 +262,7 @@ def test_push_plugin_gh_backend_defaults_to_private(tmp_path: Path) -> None:
 def test_push_plugin_gh_backend_opens_pr_on_non_main_branch(
     tmp_path: Path,
 ) -> None:
-    plugin_root = tmp_path / "p"
-    plugin_root.mkdir()
-    (plugin_root / "SKILL.md").write_text("# Skill\n")
+    plugin_root = _make_plugin_tree(tmp_path)
 
     commands: list[list[str]] = []
     with (
@@ -283,10 +289,57 @@ def test_push_plugin_gh_backend_opens_pr_on_non_main_branch(
     assert "main" in pr_cmds[0]
 
 
-def test_push_plugin_surfaces_gh_failure_as_push_error(tmp_path: Path) -> None:
-    plugin_root = tmp_path / "p"
+def test_push_plugin_wraps_tree_in_single_plugin_marketplace(tmp_path: Path) -> None:
+    """Published tree must be a marketplace: plugin.json at <name>/, marketplace.json at root."""
+    plugin_root = _make_plugin_tree(tmp_path, name="my-plugin")
+
+    commands: list[list[str]] = []
+    with (
+        patch("franklin.publisher.shutil.which", return_value="/usr/local/bin/gh"),
+        patch(
+            "franklin.publisher.subprocess.run",
+            side_effect=_make_fake_run(commands, repo_exists=True),
+        ),
+    ):
+        push_plugin(
+            plugin_root,
+            repo="owner/my-plugin",
+            commit_message="franklin: assemble my-plugin v0.1.0",
+        )
+
+    workspace = plugin_root.parent / "_publish_my-plugin"
+    assert workspace.is_dir()
+
+    marketplace_path = workspace / ".claude-plugin" / "marketplace.json"
+    assert marketplace_path.exists()
+    manifest = json.loads(marketplace_path.read_text())
+    assert manifest["name"] == "my-plugin"
+    assert len(manifest["plugins"]) == 1
+    assert manifest["plugins"][0]["name"] == "my-plugin"
+    assert manifest["plugins"][0]["source"] == "./my-plugin"
+
+    assert (workspace / "my-plugin" / ".claude-plugin" / "plugin.json").exists()
+    assert (workspace / "my-plugin" / "SKILL.md").exists()
+    assert (workspace / "README.md").exists()
+
+
+def test_push_plugin_requires_plugin_manifest(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "bare"
     plugin_root.mkdir()
-    (plugin_root / "SKILL.md").write_text("# Skill\n")
+    (plugin_root / "README.md").write_text("nope\n")
+    with (
+        patch("franklin.publisher.shutil.which", return_value="/usr/local/bin/gh"),
+        pytest.raises(PushError, match=r"no plugin\.json"),
+    ):
+        push_plugin(
+            plugin_root,
+            repo="owner/name",
+            commit_message="franklin: assemble x v0.1.0",
+        )
+
+
+def test_push_plugin_surfaces_gh_failure_as_push_error(tmp_path: Path) -> None:
+    plugin_root = _make_plugin_tree(tmp_path)
 
     commands: list[list[str]] = []
     with (

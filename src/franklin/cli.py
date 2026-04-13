@@ -228,6 +228,7 @@ def _print_next_steps(
     run_dir: Path,
     pushed: bool,
     pushed_repo: str | None,
+    plugin_name: str | None = None,
 ) -> None:
     """Render a tailored 'what to do next' block after assemble completes.
 
@@ -250,7 +251,9 @@ def _print_next_steps(
         )
         console.print()
         console.print("  [bold]Install from your published repo:[/bold]")
-        console.print(f"    [cyan]claude plugin install {pushed_repo}[/cyan]")
+        console.print(f"    [cyan]claude plugin marketplace add {pushed_repo}[/cyan]")
+        if plugin_name:
+            console.print(f"    [cyan]claude plugin install {plugin_name}@{plugin_name}[/cyan]")
         console.print()
     else:
         console.print("  [bold]1.[/bold] Try it locally before publishing:")
@@ -2369,7 +2372,13 @@ def run_pipeline(
         console.print()
         publish_command(run_dir=run.root)
     else:
-        _print_next_steps(run_dir=run.root, pushed=push, pushed_repo=repo)
+        plan_for_steps = run.load_plan() if run.plan_json.exists() else None
+        _print_next_steps(
+            run_dir=run.root,
+            pushed=push,
+            pushed_repo=repo,
+            plugin_name=plan_for_steps.plugin.name if plan_for_steps else None,
+        )
 
 
 def _validate_push_flags(
@@ -2469,11 +2478,11 @@ def push_command(
     readme_path = plugin_root / "README.md"
     if readme_path.exists():
         readme_text = readme_path.read_text()
-        if "claude plugin add owner/repo" in readme_text:
+        if "claude plugin marketplace add owner/repo" in readme_text:
             readme_text = readme_text.replace(
-                "claude plugin add owner/repo", f"claude plugin add {repo}"
+                "claude plugin marketplace add owner/repo",
+                f"claude plugin marketplace add {repo}",
             )
-            # Remove the placeholder note too.
             readme_text = readme_text.replace(
                 "\n*Replace `owner/repo` with the GitHub repository "
                 "after publishing with `franklin push`.*\n",
@@ -2622,7 +2631,8 @@ def publish_command(
     console.rule("[bold green]Published[/bold green]")
     console.print()
     console.print("  Install with:")
-    console.print(f"    [cyan]claude plugin add {repo}[/cyan]")
+    console.print(f"    [cyan]claude plugin marketplace add {repo}[/cyan]")
+    console.print(f"    [cyan]claude plugin install {plan.plugin.name}@{plan.plugin.name}[/cyan]")
     console.print()
 
 
