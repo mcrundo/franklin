@@ -302,14 +302,37 @@ EOF
     git push origin main
     git push origin "v$VERSION"
 
+    # Create the GitHub Release from the CLI so the event uses the
+    # user's personal token and triggers publish.yml + homebrew-bump.yml.
+    NOTES_FILE="$(mktemp)"
+    awk -v v="$VERSION" '
+        BEGIN { found = 0; printing = 0 }
+        /^## \[/ {
+            if (printing) { printing = 0; exit }
+            if ($0 ~ "^## \\[" v "\\]") { found = 1; printing = 1; next }
+        }
+        printing { print }
+    ' CHANGELOG.md > "$NOTES_FILE"
+
+    if command -v gh >/dev/null 2>&1; then
+        if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "  GitHub Release v$VERSION already exists."
+        else
+            gh release create "v$VERSION" --title "v$VERSION" --notes-file "$NOTES_FILE"
+            echo "  ✓ GitHub Release created"
+        fi
+    else
+        echo "  gh CLI not found — create the GitHub Release manually."
+    fi
+    rm -f "$NOTES_FILE"
+
     cat <<EOF
 
 ✓ Released v$VERSION.
 
 What happens next (watch with \`gh run watch\`):
-  1. release.yml creates the GitHub Release from CHANGELOG notes
-  2. publish.yml builds + uploads the sdist/wheel to PyPI
-  3. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
+  1. publish.yml builds + uploads the sdist/wheel to PyPI
+  2. homebrew-bump.yml waits for PyPI, opens a PR on the tap repo
 EOF
 
 else
