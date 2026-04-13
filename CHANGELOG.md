@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `franklin publish` crashed with `TypeError: '<' not supported between instances of 'float' and 'OptionInfo'` when the interactive grade gate chose "Fix all N now". `publish_command` called `fix_command(run_dir=...)` directly, leaving `threshold` as an unresolved Typer `OptionInfo`. Pass `threshold` and `model` explicitly (same pattern as the 0.4.1 fix for `run_pipeline`).
+
 ## [0.4.2] - 2026-04-13
 
 ### Fixed

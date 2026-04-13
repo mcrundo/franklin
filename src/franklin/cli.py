@@ -2542,7 +2542,11 @@ def publish_command(
 
         if fix_action == "fix":
             # Run the fix loop
-            fix_command(run_dir=run_dir)
+            fix_command(
+                run_dir=run_dir,
+                model=REDUCER_DEFAULT_MODEL,
+                threshold=_FIX_SCORE_THRESHOLD,
+            )
             # Re-grade after fix
             grade = grade_run(run_dir)
 
