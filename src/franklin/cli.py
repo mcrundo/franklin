@@ -104,6 +104,30 @@ app = typer.Typer(
     help="Turn technical books into Claude Code plugins.",
     no_args_is_help=True,
 )
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from franklin import __version__
+
+        console.print(__version__)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed franklin version and exit.",
+    ),
+) -> None:
+    pass
+
+
+
 license_app = typer.Typer(
     name="license",
     help="Manage your franklin license.",
