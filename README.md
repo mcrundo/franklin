@@ -109,6 +109,8 @@ Every stage can be run on its own, reads from disk, and writes to disk — so yo
 
 ## Publishing and installing
 
+Franklin takes you from a book file to a published, installable Claude Code plugin in one command. `franklin publish` handles the parts that are usually tedious boilerplate: creating the GitHub repo, wrapping the plugin as a Claude Code marketplace, pushing the initial commit, and printing the exact install command for your users.
+
 ```bash
 # Interactive publish: grade check, fix low artifacts, pick repo name + owner
 uv run franklin publish <run-dir>
@@ -118,13 +120,41 @@ uv run franklin run path/to/book.epub --publish
 
 # Try it locally before publishing
 uv run franklin install <run-dir> --scope local
-
-# Other users install from GitHub (published as a single-plugin marketplace)
-claude plugin marketplace add owner/repo
-claude plugin install plugin-name@plugin-name
 ```
 
-`franklin publish` walks you through repo naming (editable default from the plugin name), owner selection (personal account or org, from `gh auth`), and visibility — then pushes and prints the install command.
+### What `franklin publish` does
+
+1. **Grade check** — regrades the run and, if anything falls below B, offers to run the fix loop before you publish junk.
+2. **Repo naming** — defaults to the plugin name, editable at the prompt.
+3. **Owner selection** — lists your personal account plus any orgs you belong to (from `gh auth`), so you can publish directly to a team org.
+4. **Visibility** — public or private, your call.
+5. **Repo creation** — if `github.com/<owner>/<repo>` doesn't exist, Franklin creates it via the `gh` CLI (or the REST API with `GITHUB_TOKEN` as a fallback).
+6. **Marketplace wrapping** — the published repo is a self-contained single-plugin Claude Code marketplace:
+   ```
+   repo/
+   ├── .claude-plugin/marketplace.json   # lists the plugin
+   ├── README.md                         # GitHub-renderable copy
+   └── <plugin-name>/                    # the plugin tree itself
+       ├── .claude-plugin/plugin.json
+       ├── commands/, skills/, agents/, references/
+       └── README.md
+   ```
+   Users don't need a separate marketplace repo; the plugin repo *is* the marketplace.
+7. **Push** — initial commit with a conventional message, push to `main`.
+8. **Install command printout** — the exact two commands to give your users.
+
+### Installing a published plugin
+
+```bash
+claude plugin marketplace add <owner>/<repo>
+claude plugin install <plugin-name>@<plugin-name>
+```
+
+The marketplace slug matches the plugin name (single-plugin marketplace), so the install command is always `<name>@<name>`.
+
+### Authentication
+
+Franklin uses `gh` if it's on your PATH (preferred — reuses your existing `gh auth` credentials). If not, it falls back to the REST API with `GITHUB_TOKEN` from the environment. `franklin doctor` flags either missing.
 
 ### Batch processing
 
