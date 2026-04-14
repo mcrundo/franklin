@@ -1,3 +1,6 @@
 """Franklin: turn technical books into Claude Code plugins."""
 
-__version__ = "0.4.1"
+from importlib.metadata import version
+
+__version__ = version("franklin-book")
+
