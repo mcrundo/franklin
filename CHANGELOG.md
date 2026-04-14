@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `franklin --version` prints the installed version and exits.
+
 ## [0.4.3] - 2026-04-13
 
 ### Fixed
