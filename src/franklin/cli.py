@@ -127,7 +127,6 @@ def _main(
     pass
 
 
-
 license_app = typer.Typer(
     name="license",
     help="Manage your franklin license.",
