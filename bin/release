@@ -202,14 +202,9 @@ sed_inplace() {
 }
 
 sed_inplace "s/^version = \"$CURRENT_VERSION\"$/version = \"$VERSION\"/" pyproject.toml
-sed_inplace "s/^__version__ = \"$CURRENT_VERSION\"$/__version__ = \"$VERSION\"/" src/franklin/__init__.py
 
 if ! grep -q "^version = \"$VERSION\"$" pyproject.toml; then
     echo "error: pyproject.toml bump didn't take" >&2
-    exit 1
-fi
-if ! grep -q "^__version__ = \"$VERSION\"$" src/franklin/__init__.py; then
-    echo "error: __init__.py bump didn't take" >&2
     exit 1
 fi
 
@@ -274,7 +269,7 @@ if [[ "$MODE" == "dry" ]]; then
     exit 0
 fi
 
-git add pyproject.toml src/franklin/__init__.py uv.lock CHANGELOG.md
+git add pyproject.toml uv.lock CHANGELOG.md
 git commit -m "Release $VERSION"
 
 echo "✓ committed Release $VERSION"
