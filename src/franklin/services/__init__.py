@@ -18,12 +18,24 @@ from franklin.services.events import (
     WarningEvent,
     progress_event_adapter,
 )
+from franklin.services.ingest import (
+    CleanupStats,
+    IngestInput,
+    IngestResult,
+    IngestService,
+    MetadataConfirmHook,
+)
 
 __all__ = [
+    "CleanupStats",
     "InfoEvent",
+    "IngestInput",
+    "IngestResult",
+    "IngestService",
     "ItemDone",
     "ItemStart",
     "ItemStatus",
+    "MetadataConfirmHook",
     "ProgressCallback",
     "ProgressEvent",
     "StageFinish",

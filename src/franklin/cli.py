@@ -45,7 +45,6 @@ from franklin.checkpoint import (
     slugify,
     summarize_run,
 )
-from franklin.classify import classify_chapters
 from franklin.doctor import CheckStatus, has_failures, run_checks
 from franklin.errors import FriendlyError, format_friendly_error
 from franklin.estimate import RunEstimate, estimate_run
@@ -95,6 +94,16 @@ from franklin.schema import (
     PlanManifest,
 )
 from franklin.secrets import MissingApiKeyError, ensure_anthropic_api_key
+from franklin.services import (
+    InfoEvent,
+    IngestInput,
+    IngestService,
+    ItemDone,
+    ProgressEvent,
+    StageFinish,
+    StageStart,
+    WarningEvent,
+)
 
 _DEFAULT_MAP_CONCURRENCY = 8
 _DEFAULT_REDUCE_CONCURRENCY = 3
@@ -527,132 +536,121 @@ def ingest(
     ),
 ) -> None:
     """Parse a book file (EPUB or PDF) into normalized chapters and a partial book.json."""
-    run = _resolve_run_dir(book_path, output)
-    run.ensure()
+    run_dir = _resolve_run_dir(book_path, output).root
 
     is_pdf = book_path.suffix.lower() == ".pdf"
     if is_pdf and not yes_i_know_pdfs:
         _print_pdf_warning()
 
     if clean and not is_pdf:
+        # The service also detects this, but the CLI prints the friendlier
+        # dim note users are used to seeing, not a generic info event.
         console.print(
             "[dim]--clean is a no-op on EPUBs (they're already structurally clean)[/dim]"
         )
-        clean = False
 
     console.print(f"[bold]Ingesting[/bold] {book_path}")
+
+    def confirm(manifest: BookManifest) -> BookManifest:
+        _maybe_confirm_metadata(manifest, skip=yes)
+        return manifest
+
+    renderer = _IngestRenderer(clean_concurrency=clean_concurrency)
     try:
-        manifest, chapters = ingest_book(book_path)
+        result = IngestService().run(
+            IngestInput(
+                book_path=book_path,
+                run_dir=run_dir,
+                clean=clean,
+                clean_concurrency=clean_concurrency,
+            ),
+            progress=renderer.emit,
+            metadata_confirm=confirm,
+        )
     except UnsupportedFormatError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+    finally:
+        renderer.close()
 
-    _maybe_confirm_metadata(manifest, skip=yes)
-
-    if clean:
-        chapters, cl_in, cl_out, cleanup_cost = _run_cleanup_pass(
-            chapters, concurrency=clean_concurrency
-        )
-        run.append_cost(
-            stage="cleanup",
-            model="claude-sonnet-4-6",
-            input_tokens=cl_in,
-            output_tokens=cl_out,
-            cost_usd=cleanup_cost,
-        )
-        # Rebuild structure totals from the cleaned chapters so book.json reflects
-        # the post-cleanup word counts.
-        manifest.structure.total_words = sum(c.word_count for c in chapters)
-        by_id = {e.id: e for e in manifest.structure.toc}
-        for chapter in chapters:
-            entry = by_id.get(chapter.chapter_id)
-            if entry is not None:
-                entry.word_count = chapter.word_count
-
-    classifications = classify_chapters(chapters)
-    for toc_entry in manifest.structure.toc:
-        result = classifications[toc_entry.id]
-        toc_entry.kind = result.kind
-        toc_entry.kind_confidence = result.confidence
-        toc_entry.kind_reason = result.reason
-
-    run.save_book(manifest)
-    for chapter in chapters:
-        run.save_raw_chapter(chapter)
-
-    _print_ingest_summary(run, manifest, chapters)
+    _print_ingest_summary(RunDirectory(result.run_dir), result.manifest, result.chapters)
 
 
-def _run_cleanup_pass(
-    chapters: list[NormalizedChapter], *, concurrency: int
-) -> tuple[list[NormalizedChapter], int, int, float]:
-    """Invoke the Tier 4 LLM cleanup pass via the async pipeline.
+class _IngestRenderer:
+    """Translates IngestService progress events into Rich output.
 
-    Drives ``clean_chapters_async`` via ``asyncio.run`` with a bounded
-    semaphore so 29 chapters complete in roughly ``total / concurrency``
-    waves of ~1.5-2 min each, instead of ~50 min sequential.
+    The cleanup sub-stage owns a live Progress bar between its
+    ``stage_start`` and ``stage_finish`` events; the rest is line-at-a-
+    time console output. ``close()`` is defensive — if an exception
+    short-circuits the service, any open Progress is stopped cleanly.
     """
-    import asyncio
 
-    from franklin.ingest.cleanup import clean_chapters_async
+    def __init__(self, *, clean_concurrency: int) -> None:
+        self._clean_concurrency = clean_concurrency
+        self._progress: Progress | None = None
+        self._task_id: TaskID | None = None
 
-    try:
-        ensure_anthropic_api_key()
-    except MissingApiKeyError as exc:
-        console.print(f"[red]error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    def emit(self, event: ProgressEvent) -> None:
+        if isinstance(event, StageStart) and event.stage == "cleanup":
+            self._open_cleanup_progress(total=event.total or 0)
+        elif isinstance(event, ItemDone) and event.stage == "cleanup":
+            self._advance_cleanup(event)
+        elif isinstance(event, StageFinish) and event.stage == "cleanup":
+            self._close_cleanup(event)
+        elif isinstance(event, WarningEvent) and event.stage == "cleanup":
+            console.print(f"  [yellow]{event.message}[/yellow]")
+        elif isinstance(event, InfoEvent) and event.stage == "ingest":
+            # Library-level info like "Ingesting <path>" is already
+            # printed by the CLI before the service runs; swallow it
+            # here to avoid double-printing the same line.
+            pass
 
-    estimate = len(chapters) * 0.08  # rough per-chapter cleanup cost estimate in USD
-    console.print()
-    console.rule("[bold]Tier 4 cleanup[/bold]")
-    console.print(f"  about to send {len(chapters)} chapters to Claude for mechanical cleanup")
-    console.print(f"  concurrency: [cyan]{concurrency}[/cyan] in flight at once")
-    console.print(
-        f"  estimated cost: [yellow]~${estimate:.2f}[/yellow] total "
-        "(actual will vary with chapter length)"
-    )
-    console.print()
+    def close(self) -> None:
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+            self._task_id = None
 
-    with _stage_progress("Cleaning") as (progress, task_id):
-        progress.update(task_id, total=len(chapters))
-
-        def on_progress(chapter: NormalizedChapter) -> None:
-            progress.update(
-                task_id,
-                advance=1,
-                last=f"✓ {chapter.chapter_id}",
-            )
-
-        def on_failure(chapter: NormalizedChapter, _exc: Exception) -> None:
-            progress.update(
-                task_id,
-                advance=1,
-                last=f"⚠ {chapter.chapter_id} failed",
-            )
-
-        cleaned, total_in, total_out, failed_ids = asyncio.run(
-            clean_chapters_async(
-                chapters,
-                concurrency=concurrency,
-                on_progress=on_progress,
-                on_failure=on_failure,
-            )
-        )
-
-    console.print()
-    ok_count = len(cleaned) - len(failed_ids)
-    actual_cost = _sonnet_cost_usd(total_in, total_out)
-    console.print(
-        f"[green]✓[/green] cleanup complete: {ok_count}/{len(cleaned)} chapters cleaned "
-        f"[dim]({total_in:,} in / {total_out:,} out tokens · "
-        f"${actual_cost:.2f})[/dim]"
-    )
-    if failed_ids:
+    def _open_cleanup_progress(self, *, total: int) -> None:
+        estimate = total * 0.08
+        console.print()
+        console.rule("[bold]Tier 4 cleanup[/bold]")
+        console.print(f"  about to send {total} chapters to Claude for mechanical cleanup")
+        console.print(f"  concurrency: [cyan]{self._clean_concurrency}[/cyan] in flight at once")
         console.print(
-            f"  [yellow]{len(failed_ids)} failures:[/yellow] "
-            f"{', '.join(failed_ids)} — kept Tier 2 output for these"
+            f"  estimated cost: [yellow]~${estimate:.2f}[/yellow] total "
+            "(actual will vary with chapter length)"
         )
-    return cleaned, total_in, total_out, actual_cost
+        console.print()
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Cleaning[/bold]"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("·"),
+            TimeElapsedColumn(),
+            TextColumn("·"),
+            TimeRemainingColumn(),
+            TextColumn("· [dim]{task.fields[last]}[/dim]"),
+            console=console,
+            transient=False,
+        )
+        progress.start()
+        task_id = progress.add_task("cleaning", total=total, last="starting…")
+        self._progress = progress
+        self._task_id = task_id
+
+    def _advance_cleanup(self, event: ItemDone) -> None:
+        if self._progress is None or self._task_id is None:
+            return
+        marker = "⚠" if event.status == "fail" else "✓"
+        suffix = " failed" if event.status == "fail" else ""
+        self._progress.update(self._task_id, advance=1, last=f"{marker} {event.item_id}{suffix}")
+
+    def _close_cleanup(self, event: StageFinish) -> None:
+        self.close()
+        console.print()
+        console.print(f"[green]✓[/green] cleanup complete: {event.summary or ''}")
 
 
 def _print_pdf_warning() -> None:
