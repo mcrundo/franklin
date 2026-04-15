@@ -14,14 +14,9 @@ from pathlib import Path
 import typer
 
 from franklin.checkpoint import RunDirectory
-from franklin.cli import (
-    _FIX_SCORE_THRESHOLD,
-    _gate_pro_feature,
-    _print_grade_card,
-    app,
-    fix_command,
-)
+from franklin.cli import _gate_pro_feature, _print_grade_card, app
 from franklin.cli import console as console
+from franklin.commands.operations import _FIX_SCORE_THRESHOLD, fix_command
 from franklin.grading import grade_run
 from franklin.installer import InstallError, install_plugin
 from franklin.llm.models import REDUCE_MODEL
