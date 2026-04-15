@@ -6,12 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from franklin.checkpoint import RunDirectory
-from franklin.cli import (
-    costs_command,
-    diff_command,
-    stats_command,
-    validate_command,
-)
+from franklin.commands.diagnostics import costs_command, stats_command
+from franklin.commands.operations import diff_command, validate_command
 from franklin.schema import (
     Artifact,
     ArtifactType,

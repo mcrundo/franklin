@@ -97,7 +97,7 @@ def _patch_stages(stage_mocks: dict[str, MagicMock]) -> Any:
     stack.enter_context(patch("franklin.cli._do_plan_stage", stage_mocks["plan"]))
     stack.enter_context(patch("franklin.cli._do_reduce_stage", stage_mocks["reduce"]))
     stack.enter_context(patch("franklin.cli._do_assemble_stage", stage_mocks["assemble"]))
-    stack.enter_context(patch("franklin.cli.push_command", stage_mocks["push"]))
+    stack.enter_context(patch("franklin.commands.publishing.push_command", stage_mocks["push"]))
     return stack
 
 
@@ -404,7 +404,7 @@ def test_run_push_surfaces_license_gate_error_after_assembly(
         patch("franklin.cli._do_plan_stage", MagicMock()),
         patch("franklin.cli._do_reduce_stage", MagicMock()),
         patch("franklin.cli._do_assemble_stage", MagicMock()),
-        patch("franklin.cli.push_plugin", fake_push_plugin),
+        patch("franklin.commands.publishing.push_plugin", fake_push_plugin),
         pytest.raises(typer.Exit),
     ):
         run_pipeline(

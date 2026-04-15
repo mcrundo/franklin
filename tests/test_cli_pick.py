@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from franklin.checkpoint import RunDirectory
-from franklin.cli import _prompt_pick_candidate, _questionary_pick
+from franklin.commands.pick import _prompt_pick_candidate, _questionary_pick
 from franklin.picker import BookCandidate
 from franklin.schema import (
     BookManifest,
@@ -38,8 +38,8 @@ def test_prompt_pick_falls_back_to_table_when_not_tty() -> None:
     with (
         patch("sys.stdin.isatty", return_value=False),
         patch("sys.stdout.isatty", return_value=False),
-        patch("franklin.cli._fallback_numbered_pick") as fallback,
-        patch("franklin.cli._questionary_pick") as questionary_branch,
+        patch("franklin.commands.pick._fallback_numbered_pick") as fallback,
+        patch("franklin.commands.pick._questionary_pick") as questionary_branch,
     ):
         fallback.return_value = candidates[1]
         result = _prompt_pick_candidate(candidates)
@@ -56,8 +56,8 @@ def test_prompt_pick_uses_questionary_when_tty() -> None:
     with (
         patch("sys.stdin.isatty", return_value=True),
         patch("sys.stdout.isatty", return_value=True),
-        patch("franklin.cli._questionary_pick") as questionary_branch,
-        patch("franklin.cli._fallback_numbered_pick") as fallback,
+        patch("franklin.commands.pick._questionary_pick") as questionary_branch,
+        patch("franklin.commands.pick._fallback_numbered_pick") as fallback,
     ):
         questionary_branch.return_value = candidates[0]
         result = _prompt_pick_candidate(candidates)
