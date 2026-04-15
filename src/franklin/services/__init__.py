@@ -25,8 +25,17 @@ from franklin.services.ingest import (
     IngestService,
     MetadataConfirmHook,
 )
+from franklin.services.map import (
+    ChapterNotFoundError,
+    MapInput,
+    MapResult,
+    MapService,
+    RunNotIngestedError,
+    TargetSelection,
+)
 
 __all__ = [
+    "ChapterNotFoundError",
     "CleanupStats",
     "InfoEvent",
     "IngestInput",
@@ -35,11 +44,16 @@ __all__ = [
     "ItemDone",
     "ItemStart",
     "ItemStatus",
+    "MapInput",
+    "MapResult",
+    "MapService",
     "MetadataConfirmHook",
     "ProgressCallback",
     "ProgressEvent",
+    "RunNotIngestedError",
     "StageFinish",
     "StageStart",
+    "TargetSelection",
     "WarningEvent",
     "progress_event_adapter",
 ]

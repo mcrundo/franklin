@@ -95,11 +95,16 @@ from franklin.schema import (
 )
 from franklin.secrets import MissingApiKeyError, ensure_anthropic_api_key
 from franklin.services import (
+    ChapterNotFoundError,
     InfoEvent,
     IngestInput,
     IngestService,
     ItemDone,
+    ItemStart,
+    MapInput,
+    MapService,
     ProgressEvent,
+    RunNotIngestedError,
     StageFinish,
     StageStart,
     WarningEvent,
@@ -741,20 +746,30 @@ def map_chapters(
     ),
 ) -> None:
     """Run the map stage: per-chapter structured extraction via the LLM."""
-    run = RunDirectory(run_dir)
-    if not run.book_json.exists():
-        console.print(f"[red]error:[/red] no book.json in {run_dir} — run `franklin ingest` first")
-        raise typer.Exit(code=1)
+    service = MapService()
+    params = MapInput(
+        run_dir=run_dir,
+        chapter_id=chapter,
+        model=model,
+        force=force,
+        concurrency=concurrency,
+    )
 
-    manifest = run.load_book()
-    targets = _select_targets(run, manifest, chapter)
+    try:
+        selection = service.select_targets(params)
+    except RunNotIngestedError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except ChapterNotFoundError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
-    if not targets:
+    if not selection.targets:
         console.print("[yellow]no chapters to extract[/yellow]")
         raise typer.Exit(code=0)
 
     if dry_run:
-        _dry_run_prompt(run, manifest, targets[0])
+        _dry_run_prompt(selection.run, selection.manifest, selection.targets[0])
         return
 
     try:
@@ -763,45 +778,11 @@ def map_chapters(
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    _extract_all(run, manifest, targets, model=model, force=force, concurrency=concurrency)
-
-
-def _select_targets(
-    run: RunDirectory, manifest: BookManifest, chapter_id: str | None
-) -> list[NormalizedChapter]:
-    """Pick which chapters to extract.
-
-    Without --chapter, returns every CONTENT or INTRODUCTION chapter,
-    optionally narrowed by ``map_selection.json`` if the pick-flow gate
-    (or a prior invocation) persisted a user-chosen subset. With
-    --chapter, returns that single chapter regardless of classification
-    so users can iterate on prompts against borderline chapters.
-    """
-    if chapter_id is not None:
-        raw_path = run.raw_chapter_path(chapter_id)
-        if not raw_path.exists():
-            console.print(f"[red]error:[/red] chapter {chapter_id} not found in {run.raw_dir}")
-            raise typer.Exit(code=1)
-        return [run.load_raw_chapter(chapter_id)]
-
-    content_ids = [
-        entry.id
-        for entry in manifest.structure.toc
-        if entry.kind in (ChapterKind.CONTENT, ChapterKind.INTRODUCTION)
-    ]
-
-    selection = run.load_map_selection()
-    if selection is not None:
-        allowed = set(selection)
-        filtered = [cid for cid in content_ids if cid in allowed]
-        if filtered:
-            console.print(
-                f"  [dim]using chapter selection from map_selection.json "
-                f"({len(filtered)}/{len(content_ids)} chapters)[/dim]"
-            )
-            content_ids = filtered
-
-    return [run.load_raw_chapter(cid) for cid in content_ids]
+    renderer = _MapRenderer()
+    try:
+        service.run(params, progress=renderer.emit)
+    finally:
+        renderer.close()
 
 
 def _dry_run_prompt(run: RunDirectory, manifest: BookManifest, chapter: NormalizedChapter) -> None:
@@ -814,81 +795,63 @@ def _dry_run_prompt(run: RunDirectory, manifest: BookManifest, chapter: Normaliz
     console.print(prompt)
 
 
-def _extract_all(
-    run: RunDirectory,
-    manifest: BookManifest,
-    targets: list[NormalizedChapter],
-    *,
-    model: str,
-    force: bool,
-    concurrency: int = _DEFAULT_MAP_CONCURRENCY,
-) -> None:
-    import asyncio
+class _MapRenderer:
+    """Translate MapService progress events into the existing Rich bar."""
 
-    from franklin.mapper import extract_chapter_async
+    def __init__(self) -> None:
+        self._progress: Progress | None = None
+        self._task_id: TaskID | None = None
 
-    to_extract: list[NormalizedChapter] = []
-    skipped = 0
-    for chapter in targets:
-        if run.sidecar_path(chapter.chapter_id).exists() and not force:
-            skipped += 1
-        else:
-            to_extract.append(chapter)
-
-    if skipped:
-        console.print(f"  [dim]{skipped} chapter(s) already extracted, skipping[/dim]")
-
-    if not to_extract:
-        console.print("[green]✓[/green] map stage complete: 0 extracted, all skipped")
-        return
-
-    total_in = 0
-    total_out = 0
-    extracted = 0
-    llm = make_async_client()
-
-    async def _run() -> None:
-        nonlocal total_in, total_out, extracted
-        sem = asyncio.Semaphore(concurrency)
-
-        async def one(chapter: NormalizedChapter) -> None:
-            nonlocal total_in, total_out, extracted
-            async with sem:
-                progress.update(task_id, last=f"-> {chapter.chapter_id}")
-                sidecar, in_toks, out_toks = await extract_chapter_async(
-                    manifest, chapter, model=model, client=llm
-                )
-                run.save_sidecar(sidecar)
-                total_in += in_toks
-                total_out += out_toks
-                extracted += 1
-                progress.update(
-                    task_id,
+    def emit(self, event: ProgressEvent) -> None:
+        if event.stage != "map":
+            return
+        if isinstance(event, InfoEvent):
+            console.print(f"  [dim]{event.message}[/dim]")
+        elif isinstance(event, StageStart):
+            self._open(total=event.total or 0)
+        elif isinstance(event, ItemStart):
+            if self._progress is not None and self._task_id is not None:
+                self._progress.update(self._task_id, last=f"-> {event.item_id}")
+        elif isinstance(event, ItemDone):
+            if self._progress is not None and self._task_id is not None:
+                detail = f" ({event.detail})" if event.detail else ""
+                self._progress.update(
+                    self._task_id,
                     advance=1,
-                    last=f"v {chapter.chapter_id} ({len(sidecar.concepts)}c/{len(sidecar.rules)}r)",  # noqa: E501
+                    last=f"v {event.item_id}{detail}",
                 )
+        elif isinstance(event, StageFinish):
+            self.close()
+            # Preserve the blank-line-then-summary layout users see today.
+            # The service's summary already covers counts + tokens + cost,
+            # so we just wrap it in the familiar green check + "map stage
+            # complete" prefix.
+            console.print()
+            console.print(f"[green]✓[/green] map stage complete: {event.summary or ''}")
 
-        tasks = [one(ch) for ch in to_extract]
-        await asyncio.gather(*tasks, return_exceptions=False)
+    def close(self) -> None:
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+            self._task_id = None
 
-    with _stage_progress("Mapping") as (progress, task_id):
-        progress.update(task_id, total=len(to_extract))
-        asyncio.run(_run())
-
-    cost = _sonnet_cost_usd(total_in, total_out)
-    run.append_cost(
-        stage="map",
-        model=model,
-        input_tokens=total_in,
-        output_tokens=total_out,
-        cost_usd=cost,
-    )
-    console.print()
-    console.print(
-        f"[green]✓[/green] map stage complete: "
-        f"{extracted} extracted, {skipped} skipped "
-        f"[dim]({total_in:,} in / {total_out:,} out · ${cost:.2f})[/dim]"
-    )
+    def _open(self, *, total: int) -> None:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Mapping[/bold]"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("·"),
+            TimeElapsedColumn(),
+            TextColumn("·"),
+            TimeRemainingColumn(),
+            TextColumn("· [dim]{task.fields[last]}[/dim]"),
+            console=console,
+            transient=False,
+        )
+        progress.start()
+        self._progress = progress
+        self._task_id = progress.add_task("mapping", total=total, last="starting…")
 
 
 @app.command(name="plan")
