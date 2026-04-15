@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from franklin.checkpoint import RunDirectory
-from franklin.cli import _prompt_pick_candidate, _questionary_pick, _select_targets
+from franklin.cli import _prompt_pick_candidate, _questionary_pick
 from franklin.picker import BookCandidate
 from franklin.schema import (
     BookManifest,
@@ -18,6 +18,7 @@ from franklin.schema import (
     NormalizedChapter,
     TocEntry,
 )
+from franklin.services import MapInput, MapService
 
 
 def _candidate(name: str = "book", runs_base: Path | None = None) -> BookCandidate:
@@ -158,18 +159,19 @@ def test_select_targets_honors_map_selection(tmp_path: Path) -> None:
     run = _seed_run_dir(tmp_path / "run", n_chapters=4)
     run.save_map_selection(["ch02", "ch04"])
 
-    manifest = run.load_book()
-    targets = _select_targets(run, manifest, chapter_id=None)
-    ids = [c.chapter_id for c in targets]
+    selection = MapService().select_targets(MapInput(run_dir=run.root))
+    ids = [c.chapter_id for c in selection.targets]
     assert ids == ["ch02", "ch04"]
+    assert selection.selection_kept == 2
+    assert selection.selection_total == 4
 
 
 def test_select_targets_without_map_selection_returns_all(tmp_path: Path) -> None:
     run = _seed_run_dir(tmp_path / "run", n_chapters=3)
-    manifest = run.load_book()
-    targets = _select_targets(run, manifest, chapter_id=None)
-    ids = [c.chapter_id for c in targets]
+    selection = MapService().select_targets(MapInput(run_dir=run.root))
+    ids = [c.chapter_id for c in selection.targets]
     assert ids == ["ch01", "ch02", "ch03"]
+    assert selection.selection_kept is None
 
 
 def test_select_targets_single_chapter_ignores_map_selection(tmp_path: Path) -> None:
@@ -177,7 +179,6 @@ def test_select_targets_single_chapter_ignores_map_selection(tmp_path: Path) -> 
     persisted selection entirely."""
     run = _seed_run_dir(tmp_path / "run", n_chapters=4)
     run.save_map_selection(["ch01"])
-    manifest = run.load_book()
-    targets = _select_targets(run, manifest, chapter_id="ch03")
-    ids = [c.chapter_id for c in targets]
+    selection = MapService().select_targets(MapInput(run_dir=run.root, chapter_id="ch03"))
+    ids = [c.chapter_id for c in selection.targets]
     assert ids == ["ch03"]
