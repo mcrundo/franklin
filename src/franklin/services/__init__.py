@@ -6,6 +6,12 @@ returns a Pydantic output. The Typer commands in ``franklin.cli`` are
 thin shells that build the input, subscribe to progress, and render.
 """
 
+from franklin.services.assemble import (
+    AssembleInput,
+    AssembleResult,
+    AssembleService,
+    PluginNotBuiltError,
+)
 from franklin.services.events import (
     InfoEvent,
     ItemDone,
@@ -54,6 +60,9 @@ from franklin.services.reduce import (
 
 __all__ = [
     "ArtifactNotFoundError",
+    "AssembleInput",
+    "AssembleResult",
+    "AssembleService",
     "ChapterNotFoundError",
     "CleanupStats",
     "InfoEvent",
@@ -75,6 +84,7 @@ __all__ = [
     "PlanInput",
     "PlanResult",
     "PlanService",
+    "PluginNotBuiltError",
     "ProgressCallback",
     "ProgressEvent",
     "ReduceContext",
