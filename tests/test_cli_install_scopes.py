@@ -19,7 +19,7 @@ import pytest
 import typer
 
 from franklin import license as license_mod
-from franklin.cli import install_command
+from franklin.commands.publishing import install_command
 from franklin.installer import InstallResult
 from franklin.license import _BYPASS_ENV_VAR
 
@@ -147,7 +147,7 @@ def test_install_user_scope_calls_install_plugin(
     run_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock(return_value=_fake_install_result(tmp_path))
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="user", force=False)
 
     fake.assert_called_once()
@@ -162,7 +162,7 @@ def test_install_default_scope_is_user(
     run_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock(return_value=_fake_install_result(tmp_path))
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="user", force=False)
 
     captured = capsys.readouterr()
@@ -176,7 +176,7 @@ def test_install_default_scope_is_user(
 
 def test_install_project_scope_calls_install_plugin(run_dir: Path, tmp_path: Path) -> None:
     fake = MagicMock(return_value=_fake_install_result(tmp_path))
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="project", force=False)
     fake.assert_called_once()
 
@@ -185,7 +185,7 @@ def test_install_project_scope_prints_scope_project_in_activation(
     run_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock(return_value=_fake_install_result(tmp_path))
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="project", force=False)
 
     captured = capsys.readouterr()
@@ -197,7 +197,7 @@ def test_install_project_scope_shows_scope_in_header(
     run_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock(return_value=_fake_install_result(tmp_path))
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="project", force=False)
 
     captured = capsys.readouterr()
@@ -213,7 +213,7 @@ def test_install_local_scope_does_not_call_install_plugin(
     run_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="local", force=False)
 
     fake.assert_not_called()
@@ -225,7 +225,7 @@ def test_install_local_scope_prints_absolute_plugin_path(
     run_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="local", force=False)
 
     captured = capsys.readouterr()
@@ -237,7 +237,7 @@ def test_install_local_scope_mentions_ephemeral(
     run_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="local", force=False)
 
     captured = capsys.readouterr()
@@ -251,7 +251,7 @@ def test_install_local_scope_ignores_force(
     """--force is meaningless for local scope (nothing is written) and must
     be silently ignored rather than erroring."""
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="local", force=True)
 
     fake.assert_not_called()
@@ -265,7 +265,7 @@ def test_install_local_scope_does_not_output_marketplace_commands(
     run_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake):
+    with patch("franklin.commands.publishing.install_plugin", fake):
         install_command(run_dir=run_dir, scope="local", force=False)
 
     captured = capsys.readouterr()
@@ -297,7 +297,7 @@ def test_install_local_scope_respects_license_gate(
         state_path.unlink()
 
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake), pytest.raises(typer.Exit):
+    with patch("franklin.commands.publishing.install_plugin", fake), pytest.raises(typer.Exit):
         install_command(run_dir=run_dir, scope="local", force=False)
 
     fake.assert_not_called()
@@ -320,7 +320,7 @@ def test_install_project_scope_respects_license_gate(
         state_path.unlink()
 
     fake = MagicMock()
-    with patch("franklin.cli.install_plugin", fake), pytest.raises(typer.Exit):
+    with patch("franklin.commands.publishing.install_plugin", fake), pytest.raises(typer.Exit):
         install_command(run_dir=run_dir, scope="project", force=False)
 
     fake.assert_not_called()

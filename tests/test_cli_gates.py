@@ -20,7 +20,7 @@ import pytest
 import typer
 
 from franklin import license as license_mod
-from franklin.cli import install_command, push_command
+from franklin.commands.publishing import install_command, push_command
 from franklin.installer import InstallResult
 from franklin.license import _BYPASS_ENV_VAR, _BYPASS_SECRET
 from franklin.publisher import PushResult
@@ -147,7 +147,7 @@ def test_push_command_proceeds_with_valid_license(
             backend="gh",
         )
     )
-    with patch("franklin.cli.push_plugin", fake_push):
+    with patch("franklin.commands.publishing.push_plugin", fake_push):
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -164,7 +164,7 @@ def test_push_command_blocks_with_missing_license(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     fake_push = MagicMock()
-    with patch("franklin.cli.push_plugin", fake_push), pytest.raises(typer.Exit) as exc_info:
+    with patch("franklin.commands.publishing.push_plugin", fake_push), pytest.raises(typer.Exit) as exc_info:
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -190,7 +190,7 @@ def test_push_command_blocks_with_expired_license(
     _seed_license(_mint(exp_delta=timedelta(seconds=-1)))
 
     fake_push = MagicMock()
-    with patch("franklin.cli.push_plugin", fake_push), pytest.raises(typer.Exit) as exc_info:
+    with patch("franklin.commands.publishing.push_plugin", fake_push), pytest.raises(typer.Exit) as exc_info:
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -214,7 +214,7 @@ def test_push_command_blocks_when_feature_not_granted(
     _seed_license(_mint(features=["install"]))  # install only, not push
 
     fake_push = MagicMock()
-    with patch("franklin.cli.push_plugin", fake_push), pytest.raises(typer.Exit):
+    with patch("franklin.commands.publishing.push_plugin", fake_push), pytest.raises(typer.Exit):
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -243,7 +243,7 @@ def test_push_command_proceeds_when_bypass_active(
             backend="gh",
         )
     )
-    with patch("franklin.cli.push_plugin", fake_push):
+    with patch("franklin.commands.publishing.push_plugin", fake_push):
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -275,7 +275,7 @@ def test_install_command_proceeds_with_valid_license(
             replaced=False,
         )
     )
-    with patch("franklin.cli.install_plugin", fake_install):
+    with patch("franklin.commands.publishing.install_plugin", fake_install):
         install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_called_once()
@@ -287,7 +287,7 @@ def test_install_command_blocks_with_missing_license(
 ) -> None:
     fake_install = MagicMock()
     with (
-        patch("franklin.cli.install_plugin", fake_install),
+        patch("franklin.commands.publishing.install_plugin", fake_install),
         pytest.raises(typer.Exit) as exc_info,
     ):
         install_command(run_dir=run_dir, scope="user", force=False)
@@ -307,7 +307,7 @@ def test_install_command_blocks_when_feature_not_granted(
     _seed_license(_mint(features=["push"]))  # push only, not install
 
     fake_install = MagicMock()
-    with patch("franklin.cli.install_plugin", fake_install), pytest.raises(typer.Exit):
+    with patch("franklin.commands.publishing.install_plugin", fake_install), pytest.raises(typer.Exit):
         install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_not_called()
@@ -331,7 +331,7 @@ def test_install_command_proceeds_when_bypass_active(
             replaced=False,
         )
     )
-    with patch("franklin.cli.install_plugin", fake_install):
+    with patch("franklin.commands.publishing.install_plugin", fake_install):
         install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_called_once()
