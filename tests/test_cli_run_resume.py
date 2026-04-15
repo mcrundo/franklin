@@ -66,11 +66,11 @@ def _patch_all_stages() -> tuple[Any, dict[str, MagicMock]]:
         "assemble": MagicMock(),
     }
     stack = ExitStack()
-    stack.enter_context(patch("franklin.cli.ingest", mocks["ingest"]))
-    stack.enter_context(patch("franklin.cli.map_chapters", mocks["map"]))
-    stack.enter_context(patch("franklin.cli.plan_pipeline", mocks["plan"]))
-    stack.enter_context(patch("franklin.cli.reduce_pipeline", mocks["reduce"]))
-    stack.enter_context(patch("franklin.cli.assemble_pipeline", mocks["assemble"]))
+    stack.enter_context(patch("franklin.cli._do_ingest_stage", mocks["ingest"]))
+    stack.enter_context(patch("franklin.cli._do_map_stage", mocks["map"]))
+    stack.enter_context(patch("franklin.cli._do_plan_stage", mocks["plan"]))
+    stack.enter_context(patch("franklin.cli._do_reduce_stage", mocks["reduce"]))
+    stack.enter_context(patch("franklin.cli._do_assemble_stage", mocks["assemble"]))
     return stack, mocks
 
 
