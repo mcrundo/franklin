@@ -164,7 +164,10 @@ def test_push_command_blocks_with_missing_license(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     fake_push = MagicMock()
-    with patch("franklin.commands.publishing.push_plugin", fake_push), pytest.raises(typer.Exit) as exc_info:
+    with (
+        patch("franklin.commands.publishing.push_plugin", fake_push),
+        pytest.raises(typer.Exit) as exc_info,
+    ):
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -190,7 +193,10 @@ def test_push_command_blocks_with_expired_license(
     _seed_license(_mint(exp_delta=timedelta(seconds=-1)))
 
     fake_push = MagicMock()
-    with patch("franklin.commands.publishing.push_plugin", fake_push), pytest.raises(typer.Exit) as exc_info:
+    with (
+        patch("franklin.commands.publishing.push_plugin", fake_push),
+        pytest.raises(typer.Exit) as exc_info,
+    ):
         push_command(
             run_dir=run_dir,
             repo="owner/name",
@@ -307,7 +313,10 @@ def test_install_command_blocks_when_feature_not_granted(
     _seed_license(_mint(features=["push"]))  # push only, not install
 
     fake_install = MagicMock()
-    with patch("franklin.commands.publishing.install_plugin", fake_install), pytest.raises(typer.Exit):
+    with (
+        patch("franklin.commands.publishing.install_plugin", fake_install),
+        pytest.raises(typer.Exit),
+    ):
         install_command(run_dir=run_dir, scope="user", force=False)
 
     fake_install.assert_not_called()
