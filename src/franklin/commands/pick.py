@@ -19,13 +19,9 @@ from typing import Any
 import typer
 from rich.table import Table
 
-from franklin.cli import (
-    _print_estimate_callout,
-    _resolve_run_dir,
-    app,
-    ingest,
-)
+from franklin.cli import _print_estimate_callout, _resolve_run_dir, app
 from franklin.cli import console as console
+from franklin.commands.stages import ingest
 from franklin.estimate import estimate_run
 from franklin.ingest import UnsupportedFormatError
 from franklin.picker import (
