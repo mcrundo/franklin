@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from _fakes import FakeClient
 from franklin.planner import (
     build_distilled_view,
     build_tool_schema,
@@ -149,35 +149,11 @@ def test_build_tool_schema_is_object_with_required_categories() -> None:
         assert field in schema["properties"]
 
 
-class _FakeStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
-
-    def get_final_message(self) -> Any:
-        return self._response
+_PLANNER_USAGE = {"input_tokens": 50_000, "output_tokens": 8_000}
 
 
-class _FakeClient:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-        self.messages = self
-        self.last_kwargs: dict[str, Any] | None = None
-
-    def stream(self, **kwargs: Any) -> _FakeStream:
-        self.last_kwargs = kwargs
-        return _FakeStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input=self._payload)],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(input_tokens=50_000, output_tokens=8_000),
-            )
-        )
+def _client(payload: dict[str, Any]) -> FakeClient:
+    return FakeClient(payload, usage=_PLANNER_USAGE)
 
 
 def test_design_plan_merges_with_run_metadata() -> None:
@@ -208,7 +184,7 @@ def test_design_plan_merges_with_run_metadata() -> None:
         "estimated_total_output_tokens": 3000,
         "estimated_reduce_calls": 1,
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
 
     plan, in_toks, out_toks = design_plan(book, sidecars, client=client)
 
@@ -227,7 +203,7 @@ def test_design_plan_merges_with_run_metadata() -> None:
 
 def test_design_plan_rejects_invalid_proposal() -> None:
     bad = {"plugin": {"name": "x"}, "planner_rationale": "test"}  # missing plugin.description
-    client = _FakeClient(bad)
+    client = _client(bad)
     with pytest.raises(RuntimeError, match="invalid proposal"):
         design_plan(_book(), [_sidecar("ch04")], client=client)
 
@@ -262,7 +238,7 @@ def test_design_plan_recovers_from_stray_extra_field(
         "estimated_total_output_tokens": 3000,
         "estimated_reduce_calls": 1,
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
 
     with caplog.at_level("WARNING", logger="franklin.llm.validation"):
         plan, _, _ = design_plan(_book(), [_sidecar("ch04")], client=client)

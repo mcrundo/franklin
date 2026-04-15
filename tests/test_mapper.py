@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from _fakes import FakeAsyncClient, FakeClient, FakeStream
 from franklin.ingest import ingest_epub
 from franklin.mapper import (
     build_tool_schema,
@@ -108,68 +109,16 @@ def test_build_tool_schema_is_an_object_schema() -> None:
         assert category in schema["properties"], f"missing category {category}"
 
 
-class _FakeStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
-
-    def get_final_message(self) -> Any:
-        return self._response
+_SYNC_USAGE = {"input_tokens": 123, "output_tokens": 456}
+_ASYNC_USAGE = {"input_tokens": 100, "output_tokens": 200}
 
 
-class _FakeAsyncStream:
-    """Async counterpart of _FakeStream for testing async extract/generate."""
-
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _FakeAsyncStream:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        return None
-
-    async def get_final_message(self) -> Any:
-        return self._response
+def _client(payload: dict[str, Any]) -> FakeClient:
+    return FakeClient(payload, usage=_SYNC_USAGE)
 
 
-class _FakeClient:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-        self.messages = self
-        self.last_kwargs: dict[str, Any] | None = None
-
-    def stream(self, **kwargs: Any) -> _FakeStream:
-        self.last_kwargs = kwargs
-        return _FakeStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input=self._payload)],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(input_tokens=123, output_tokens=456),
-            )
-        )
-
-
-class _FakeAsyncClient:
-    """Async counterpart of _FakeClient for testing async extract/generate."""
-
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-        self.messages = self
-
-    def stream(self, **kwargs: Any) -> _FakeAsyncStream:
-        return _FakeAsyncStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input=self._payload)],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(input_tokens=100, output_tokens=200),
-            )
-        )
+def _async_client(payload: dict[str, Any]) -> FakeAsyncClient:
+    return FakeAsyncClient(payload, usage=_ASYNC_USAGE)
 
 
 def test_extract_chapter_merges_with_ingest_metadata() -> None:
@@ -187,7 +136,7 @@ def test_extract_chapter_merges_with_ingest_metadata() -> None:
             }
         ],
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
 
     sidecar, in_toks, out_toks = extract_chapter(book, chapter, client=client)
 
@@ -221,7 +170,7 @@ def test_extract_chapter_async_round_trip() -> None:
             }
         ],
     }
-    client = _FakeAsyncClient(payload)
+    client = _async_client(payload)
     sidecar, in_toks, out_toks = asyncio.run(extract_chapter_async(book, chapter, client=client))
     assert sidecar.chapter_id == "ch03"
     assert sidecar.summary == "Async test."
@@ -232,7 +181,7 @@ def test_extract_chapter_async_round_trip() -> None:
 
 def test_extract_chapter_rejects_invalid_payload() -> None:
     bad_payload = {"concepts": [{"id": "missing fields"}]}  # no summary, invalid concept
-    client = _FakeClient(bad_payload)
+    client = _client(bad_payload)
     with pytest.raises(RuntimeError, match="invalid payload"):
         extract_chapter(_book(), _chapter(), client=client)
 
@@ -256,7 +205,7 @@ def test_extract_chapter_recovers_from_stray_extra_field(
             },
         ],
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
 
     with caplog.at_level("WARNING", logger="franklin.mapper.extractor"):
         sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
@@ -287,7 +236,7 @@ def test_extract_chapter_recovers_from_multiple_stray_extras() -> None:
             },
         ],
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
     sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
     assert [p.id for p in sidecar.principles] == ["p1", "p2"]
 
@@ -313,7 +262,7 @@ def test_extract_chapter_recovers_from_stringified_json_list(
         "summary": "A chapter with stringified anti_patterns.",
         "anti_patterns": json.dumps(anti_patterns_list),
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
 
     with caplog.at_level("WARNING", logger="franklin.llm.validation"):
         sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
@@ -324,17 +273,22 @@ def test_extract_chapter_recovers_from_stringified_json_list(
 
 
 class _SequenceClient:
-    """Fake client that returns a different payload on each call."""
+    """Fake client that returns a different payload on each call.
+
+    Can't use the shared FakeClient directly because each stream() needs
+    a different payload — this pops from a list per call. The extractor
+    retry path exercises this.
+    """
 
     def __init__(self, payloads: list[dict[str, Any]]) -> None:
         self._payloads = list(payloads)
         self.messages = self
         self.call_count = 0
 
-    def stream(self, **kwargs: Any) -> _FakeStream:
+    def stream(self, **_kwargs: Any) -> FakeStream:
         payload = self._payloads[self.call_count]
         self.call_count += 1
-        return _FakeStream(
+        return FakeStream(
             SimpleNamespace(
                 content=[SimpleNamespace(type="tool_use", input=payload)],
                 stop_reason="tool_use",
@@ -384,7 +338,7 @@ def test_extract_chapter_recovers_from_stringified_json_with_literal_newlines(
             '"fix": "Escape it",\n    "source_location": "ch03 §1"\n  }\n]'
         ),
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
 
     with caplog.at_level("WARNING", logger="franklin.llm.validation"):
         sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
@@ -405,7 +359,7 @@ def test_extract_chapter_still_rejects_non_extra_errors() -> None:
             }
         ],
     }
-    client = _FakeClient(payload)
+    client = _client(payload)
     with pytest.raises(RuntimeError, match="invalid payload"):
         extract_chapter(_book(), _chapter(), client=client)
 

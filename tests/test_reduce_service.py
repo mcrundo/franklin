@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from _fakes import FakeAsyncClient
 from franklin.checkpoint import RunDirectory
 from franklin.schema import (
     Artifact,
@@ -35,43 +35,16 @@ from franklin.services.reduce import (
     UnknownArtifactTypeError,
 )
 
-# ---------------------------------------------------------------------------
-# Fake async client — same shape as reducer tests
-# ---------------------------------------------------------------------------
+_REDUCE_USAGE = {
+    "input_tokens": 500,
+    "output_tokens": 200,
+    "cache_read_input_tokens": 300,
+    "cache_creation_input_tokens": 0,
+}
 
 
-class _FakeAsyncStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _FakeAsyncStream:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        return None
-
-    async def get_final_message(self) -> Any:
-        return self._response
-
-
-class _FakeAsyncClient:
-    def __init__(self, body: str) -> None:
-        self._body = body
-        self.messages = self
-
-    def stream(self, **_kwargs: Any) -> _FakeAsyncStream:
-        return _FakeAsyncStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input={"content": self._body})],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(
-                    input_tokens=500,
-                    output_tokens=200,
-                    cache_read_input_tokens=300,
-                    cache_creation_input_tokens=0,
-                ),
-            )
-        )
+def _reduce_fake(body: str) -> FakeAsyncClient:
+    return FakeAsyncClient({"content": body}, usage=_REDUCE_USAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +183,7 @@ def test_reduce_service_generates_artifacts_and_emits_events(tmp_path: Path) -> 
     result = ReduceService().run(
         ReduceInput(run_dir=run.root, concurrency=1),
         progress=events.append,
-        client=_FakeAsyncClient(_valid_md_body("s")),
+        client=_reduce_fake(_valid_md_body("s")),
     )
 
     assert isinstance(result, ReduceResult)
@@ -232,7 +205,7 @@ def test_reduce_service_generates_artifacts_and_emits_events(tmp_path: Path) -> 
 
 def test_reduce_service_skips_existing_unless_forced(tmp_path: Path) -> None:
     run, _ = _seed_run(tmp_path, n_artifacts=1)
-    client = _FakeAsyncClient(_valid_md_body("s"))
+    client = _reduce_fake(_valid_md_body("s"))
 
     first = ReduceService().run(ReduceInput(run_dir=run.root), client=client)
     assert first.generated_count == 1
@@ -259,7 +232,7 @@ def test_generate_accepts_pre_built_context(tmp_path: Path) -> None:
         custom_targets,
         force=True,
         concurrency=1,
-        client=_FakeAsyncClient(_valid_md_body("s")),
+        client=_reduce_fake(_valid_md_body("s")),
     )
 
     assert result.generated_count == 1
@@ -271,31 +244,18 @@ def test_reduce_service_collects_failures_nonfatally(tmp_path: Path) -> None:
     """One failing artifact doesn't stop the batch."""
     run, _plan = _seed_run(tmp_path, n_artifacts=2)
 
-    class _BrokenClient:
-        messages = None  # will be reset below
-
+    # First call raises; subsequent calls return a valid body. Built by
+    # wrapping FakeAsyncClient's stream to inject the error on call 1.
+    class _BrokenClient(FakeAsyncClient):
         def __init__(self) -> None:
-            self.messages = self
-            self._calls = 0
+            super().__init__({"content": _valid_md_body("s")})
+            self._call_count = 0
 
-        def stream(self, **_kwargs: Any) -> _FakeAsyncStream:
-            self._calls += 1
-            if self._calls == 1:
+        def stream(self, **kwargs: Any) -> Any:
+            self._call_count += 1
+            if self._call_count == 1:
                 raise RuntimeError("boom")
-            return _FakeAsyncStream(
-                SimpleNamespace(
-                    content=[
-                        SimpleNamespace(type="tool_use", input={"content": _valid_md_body("s")})
-                    ],
-                    stop_reason="tool_use",
-                    usage=SimpleNamespace(
-                        input_tokens=100,
-                        output_tokens=50,
-                        cache_read_input_tokens=0,
-                        cache_creation_input_tokens=0,
-                    ),
-                )
-            )
+            return super().stream(**kwargs)
 
     result = ReduceService().run(
         ReduceInput(run_dir=run.root, concurrency=1),
