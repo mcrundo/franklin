@@ -12,6 +12,7 @@ ingest data. Keep the responsibilities here tight.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import ValidationError
@@ -34,6 +35,15 @@ from franklin.schema import (
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# When the LLM returns a payload that fails ChapterExtraction validation
+# (most commonly a stringified JSON list it couldn't stuff into a real
+# array), retry the whole tool call a few times before giving up. Non-zero
+# temperature plus a fresh request usually gets us a clean payload on the
+# second or third try, saving the user from re-running the whole stage.
+_MAX_VALIDATION_ATTEMPTS = 3
+
+logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "save_chapter_extraction"
 _TOOL_DESCRIPTION = (
@@ -72,30 +82,46 @@ def extract_chapter(
     user_prompt = build_user_prompt(book, chapter)
     tool_schema = build_tool_schema()
 
-    result = call_tool(
-        client=llm,
-        model=model,
-        system=_SYSTEM_PROMPT,
-        user=user_prompt,
-        tool_name=_TOOL_NAME,
-        tool_description=_TOOL_DESCRIPTION,
-        tool_schema=tool_schema,
-        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
-    )
-
-    try:
-        extraction = validate_with_extra_recovery(
-            ChapterExtraction,
-            result.input,
-            label=f"mapper:{chapter.chapter_id}",
+    tokens_in = 0
+    tokens_out = 0
+    last_error: ValidationError | None = None
+    for attempt in range(1, _MAX_VALIDATION_ATTEMPTS + 1):
+        result = call_tool(
+            client=llm,
+            model=model,
+            system=_SYSTEM_PROMPT,
+            user=user_prompt,
+            tool_name=_TOOL_NAME,
+            tool_description=_TOOL_DESCRIPTION,
+            tool_schema=tool_schema,
+            max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
         )
-    except ValidationError as exc:
-        raise RuntimeError(
-            f"extractor returned invalid payload for {chapter.chapter_id}: {exc}"
-        ) from exc
+        tokens_in += result.input_tokens
+        tokens_out += result.output_tokens
+        try:
+            extraction = validate_with_extra_recovery(
+                ChapterExtraction,
+                result.input,
+                label=f"mapper:{chapter.chapter_id}",
+            )
+        except ValidationError as exc:
+            last_error = exc
+            logger.warning(
+                "mapper:%s: attempt %d/%d returned invalid payload, retrying: %s",
+                chapter.chapter_id,
+                attempt,
+                _MAX_VALIDATION_ATTEMPTS,
+                _summarize_error(exc),
+            )
+            continue
+        sidecar = ChapterSidecar.from_extraction(chapter, extraction)
+        return sidecar, tokens_in, tokens_out
 
-    sidecar = ChapterSidecar.from_extraction(chapter, extraction)
-    return sidecar, result.input_tokens, result.output_tokens
+    assert last_error is not None
+    raise RuntimeError(
+        f"extractor returned invalid payload for {chapter.chapter_id} "
+        f"after {_MAX_VALIDATION_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 async def extract_chapter_async(
@@ -111,30 +137,56 @@ async def extract_chapter_async(
     user_prompt = build_user_prompt(book, chapter)
     tool_schema = build_tool_schema()
 
-    result = await call_tool_async(
-        client=llm,
-        model=model,
-        system=_SYSTEM_PROMPT,
-        user=user_prompt,
-        tool_name=_TOOL_NAME,
-        tool_description=_TOOL_DESCRIPTION,
-        tool_schema=tool_schema,
-        max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
-    )
-
-    try:
-        extraction = validate_with_extra_recovery(
-            ChapterExtraction,
-            result.input,
-            label=f"mapper:{chapter.chapter_id}",
+    tokens_in = 0
+    tokens_out = 0
+    last_error: ValidationError | None = None
+    for attempt in range(1, _MAX_VALIDATION_ATTEMPTS + 1):
+        result = await call_tool_async(
+            client=llm,
+            model=model,
+            system=_SYSTEM_PROMPT,
+            user=user_prompt,
+            tool_name=_TOOL_NAME,
+            tool_description=_TOOL_DESCRIPTION,
+            tool_schema=tool_schema,
+            max_tokens=max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
         )
-    except ValidationError as exc:
-        raise RuntimeError(
-            f"extractor returned invalid payload for {chapter.chapter_id}: {exc}"
-        ) from exc
+        tokens_in += result.input_tokens
+        tokens_out += result.output_tokens
+        try:
+            extraction = validate_with_extra_recovery(
+                ChapterExtraction,
+                result.input,
+                label=f"mapper:{chapter.chapter_id}",
+            )
+        except ValidationError as exc:
+            last_error = exc
+            logger.warning(
+                "mapper:%s: attempt %d/%d returned invalid payload, retrying: %s",
+                chapter.chapter_id,
+                attempt,
+                _MAX_VALIDATION_ATTEMPTS,
+                _summarize_error(exc),
+            )
+            continue
+        sidecar = ChapterSidecar.from_extraction(chapter, extraction)
+        return sidecar, tokens_in, tokens_out
 
-    sidecar = ChapterSidecar.from_extraction(chapter, extraction)
-    return sidecar, result.input_tokens, result.output_tokens
+    assert last_error is not None
+    raise RuntimeError(
+        f"extractor returned invalid payload for {chapter.chapter_id} "
+        f"after {_MAX_VALIDATION_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
+
+
+def _summarize_error(exc: ValidationError) -> str:
+    """One-line summary of a ValidationError for log readability."""
+    errors = exc.errors()
+    if not errors:
+        return "unknown validation error"
+    first = errors[0]
+    loc = ".".join(str(p) for p in first.get("loc", ())) or "<root>"
+    return f"{first.get('type', 'error')} at {loc} ({len(errors)} total)"
 
 
 def build_user_prompt(book: BookManifest, chapter: NormalizedChapter) -> str:
