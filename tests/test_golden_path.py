@@ -17,14 +17,12 @@ stages.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from _fakes import ScriptedClient
 from franklin.assembler import (
     validate_frontmatter,
     validate_links,
@@ -42,61 +40,6 @@ from franklin.schema import (
 FIXTURE_EPUB = Path(__file__).resolve().parents[1] / (
     "Layered Design for Ruby on Rails Applications by Vladimir Dementyev.epub"
 )
-
-
-# ---------------------------------------------------------------------------
-# Scripted fake Anthropic client
-# ---------------------------------------------------------------------------
-
-
-class _FakeStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
-
-    def get_final_message(self) -> Any:
-        return self._response
-
-
-class _ScriptedClient:
-    """Dispatches fake tool-use responses by ``tool_name``.
-
-    Each stage's call_tool() selects a tool; this fake looks at the
-    ``tool_choice`` kwarg and returns the scripted payload for that
-    tool. Callers register payload-factories that can inspect the
-    kwargs (e.g. to tailor extraction output to the current chapter).
-    """
-
-    def __init__(self) -> None:
-        self._handlers: dict[str, Any] = {}
-        self.messages = self
-        self.calls: list[dict[str, Any]] = []
-
-    def register(self, tool_name: str, factory: Any) -> None:
-        self._handlers[tool_name] = factory
-
-    @contextmanager
-    def stream(self, **kwargs: Any) -> Iterator[_FakeStream]:
-        self.calls.append(kwargs)
-        tool_name = kwargs["tool_choice"]["name"]
-        payload = self._handlers[tool_name](kwargs)
-        yield _FakeStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input=payload)],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(
-                    input_tokens=100,
-                    output_tokens=50,
-                    cache_read_input_tokens=0,
-                    cache_creation_input_tokens=0,
-                ),
-            )
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +124,7 @@ def _artifact_content(_kwargs: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.skipif(not FIXTURE_EPUB.exists(), reason="fixture EPUB not present")
 def test_golden_path_ingest_to_assemble(tmp_path: Path) -> None:
-    client = _ScriptedClient()
+    client = ScriptedClient()
     client.register("save_chapter_extraction", _chapter_extraction_for)
     client.register("save_plan_proposal", _plan_proposal)
     client.register("save_artifact_file", _artifact_content)
@@ -272,7 +215,7 @@ def test_golden_path_records_expected_tool_calls(tmp_path: Path) -> None:
         text="ch01 body text.",
     )
 
-    client = _ScriptedClient()
+    client = ScriptedClient()
     client.register("save_chapter_extraction", _chapter_extraction_for)
 
     sidecar, _, _ = extract_chapter(book, chapter, client=client)

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from _fakes import FakeClient
 from franklin.checkpoint import RunDirectory
 from franklin.schema import (
     BookManifest,
@@ -30,34 +30,7 @@ from franklin.services.plan import (
     PlanService,
 )
 
-
-class _FakeStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
-
-    def get_final_message(self) -> Any:
-        return self._response
-
-
-class _FakeClient:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-        self.messages = self
-
-    def stream(self, **_kwargs: Any) -> _FakeStream:
-        return _FakeStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input=self._payload)],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(input_tokens=10_000, output_tokens=2_000),
-            )
-        )
+_PLAN_USAGE = {"input_tokens": 10_000, "output_tokens": 2_000}
 
 
 def _seed_run_with_sidecars(tmp_path: Path) -> RunDirectory:
@@ -175,7 +148,7 @@ def test_plan_service_runs_and_emits_events(tmp_path: Path) -> None:
     result = PlanService().run(
         PlanInput(run_dir=run.root),
         progress=events.append,
-        client=_FakeClient(_plan_proposal()),
+        client=FakeClient(_plan_proposal(), usage=_PLAN_USAGE),
     )
 
     assert isinstance(result, PlanResult)

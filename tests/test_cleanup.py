@@ -2,65 +2,31 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from _fakes import FakeClient
 from franklin.ingest.cleanup import clean_chapter, clean_chapters
 from franklin.schema import CodeBlock, NormalizedChapter
 
-# ---------------------------------------------------------------------------
-# Fake streaming client (same shape used across the map/plan/reduce tests)
-# ---------------------------------------------------------------------------
 
-
-class _FakeStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
-
-    def get_final_message(self) -> Any:
-        return self._response
-
-
-class _FakeClient:
-    def __init__(
-        self, cleaned_text: str, *, input_tokens: int = 100, output_tokens: int = 80
-    ) -> None:
-        self._cleaned_text = cleaned_text
-        self._input_tokens = input_tokens
-        self._output_tokens = output_tokens
-        self.messages = self
-        self.last_kwargs: dict[str, Any] | None = None
-
-    def stream(self, **kwargs: Any) -> _FakeStream:
-        self.last_kwargs = kwargs
-        return _FakeStream(
-            SimpleNamespace(
-                content=[
-                    SimpleNamespace(type="tool_use", input={"cleaned_text": self._cleaned_text})
-                ],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(
-                    input_tokens=self._input_tokens,
-                    output_tokens=self._output_tokens,
-                ),
-            )
-        )
+def _client(cleaned_text: str, *, input_tokens: int = 100, output_tokens: int = 80) -> FakeClient:
+    return FakeClient(
+        {"cleaned_text": cleaned_text},
+        usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
+    )
 
 
 class _RaisingClient:
+    """Simulates a network failure — can't use FakeClient since this
+    needs to raise before ever yielding a stream."""
+
     def __init__(self) -> None:
         self.messages = self
 
-    def stream(self, **_: Any) -> _FakeStream:
+    def stream(self, **_: Any) -> Any:
         raise RuntimeError("anthropic: simulated network failure")
 
 
@@ -89,9 +55,7 @@ def _chapter(
 
 def test_clean_chapter_replaces_text_with_cleaned_version() -> None:
     chapter = _chapter()
-    client = _FakeClient(
-        "But there is one part of every app that Rails doesn't have a clear answer."
-    )
+    client = _client("But there is one part of every app that Rails doesn't have a clear answer.")
     result, in_toks, out_toks = clean_chapter(chapter, client=client)
 
     assert "ButthereisonepartofeveryappthatRails" not in result.text
@@ -104,7 +68,7 @@ def test_clean_chapter_recomputes_word_count() -> None:
     chapter = _chapter(text="ButthereisonepartofeveryappthatRails")
     assert chapter.word_count == 1  # Tier 2 counted it as a single jumbled token
 
-    client = _FakeClient("But there is one part of every app that Rails")
+    client = _client("But there is one part of every app that Rails")
     result, _, _ = clean_chapter(chapter, client=client)
     assert result.word_count == 10
 
@@ -115,7 +79,7 @@ def test_clean_chapter_preserves_code_blocks_verbatim() -> None:
 
     # The fake client returns only cleaned prose; code blocks can't be touched
     # by the tool because they aren't in the schema.
-    client = _FakeClient("cleaned prose")
+    client = _client("cleaned prose")
     result, _, _ = clean_chapter(chapter, client=client)
 
     assert result.code_blocks == chapter.code_blocks
@@ -124,7 +88,7 @@ def test_clean_chapter_preserves_code_blocks_verbatim() -> None:
 
 def test_clean_chapter_preserves_identity_fields() -> None:
     chapter = _chapter(chapter_id="ch07")
-    client = _FakeClient("cleaned")
+    client = _client("cleaned")
     result, _, _ = clean_chapter(chapter, client=client)
 
     assert result.chapter_id == "ch07"
@@ -136,7 +100,7 @@ def test_clean_chapter_preserves_identity_fields() -> None:
 
 def test_clean_chapter_forces_tool_choice() -> None:
     chapter = _chapter()
-    client = _FakeClient("cleaned prose")
+    client = _client("cleaned prose")
     clean_chapter(chapter, client=client)
 
     assert client.last_kwargs is not None
@@ -152,7 +116,7 @@ def test_clean_chapter_forces_tool_choice() -> None:
 
 def test_clean_chapter_rejects_empty_cleaned_text() -> None:
     chapter = _chapter()
-    client = _FakeClient("   ")
+    client = _client("   ")
     with pytest.raises(RuntimeError, match="empty text"):
         clean_chapter(chapter, client=client)
 
@@ -174,7 +138,7 @@ def test_clean_chapters_processes_every_chapter() -> None:
         _chapter("ch02", text="more text"),
         _chapter("ch03", text="final text"),
     ]
-    client = _FakeClient("cleaned")
+    client = _client("cleaned")
 
     cleaned, in_toks, out_toks, failed = clean_chapters(chapters, client=client)
     assert len(cleaned) == 3

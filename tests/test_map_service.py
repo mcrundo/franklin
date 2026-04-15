@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from _fakes import FakeAsyncClient
 from franklin.checkpoint import RunDirectory
 from franklin.schema import (
     BookManifest,
@@ -28,40 +28,7 @@ from franklin.services.map import (
     RunNotIngestedError,
 )
 
-# ---------------------------------------------------------------------------
-# Fake async Anthropic client (same shape as tests/test_mapper.py's)
-# ---------------------------------------------------------------------------
-
-
-class _FakeAsyncStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _FakeAsyncStream:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        return None
-
-    async def get_final_message(self) -> Any:
-        return self._response
-
-
-class _FakeAsyncClient:
-    """Returns the same ChapterExtraction payload for every call."""
-
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-        self.messages = self
-
-    def stream(self, **_kwargs: Any) -> _FakeAsyncStream:
-        return _FakeAsyncStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input=self._payload)],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(input_tokens=100, output_tokens=40),
-            )
-        )
+_MAP_USAGE = {"input_tokens": 100, "output_tokens": 40}
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +113,7 @@ def test_select_targets_raises_on_unknown_chapter_id(tmp_path: Path) -> None:
 
 def test_map_service_extracts_and_emits_events(tmp_path: Path) -> None:
     run = _seed_run(tmp_path, n_chapters=2)
-    client = _FakeAsyncClient(_extraction_payload())
+    client = FakeAsyncClient(_extraction_payload(), usage=_MAP_USAGE)
 
     events: list[Any] = []
     result = MapService().run(
@@ -174,7 +141,7 @@ def test_map_service_extracts_and_emits_events(tmp_path: Path) -> None:
 
 def test_map_service_skips_existing_sidecars_unless_forced(tmp_path: Path) -> None:
     run = _seed_run(tmp_path, n_chapters=2)
-    client = _FakeAsyncClient(_extraction_payload())
+    client = FakeAsyncClient(_extraction_payload(), usage=_MAP_USAGE)
 
     # First pass extracts both.
     MapService().run(MapInput(run_dir=run.root), client=client)
@@ -188,7 +155,7 @@ def test_map_service_skips_existing_sidecars_unless_forced(tmp_path: Path) -> No
 
 def test_map_service_honors_force(tmp_path: Path) -> None:
     run = _seed_run(tmp_path, n_chapters=2)
-    client = _FakeAsyncClient(_extraction_payload())
+    client = FakeAsyncClient(_extraction_payload(), usage=_MAP_USAGE)
     MapService().run(MapInput(run_dir=run.root), client=client)
 
     result = MapService().run(MapInput(run_dir=run.root, force=True), client=client)

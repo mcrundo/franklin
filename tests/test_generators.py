@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
+from _fakes import FakeAsyncClient, FakeClient
 from franklin.reducer.generators import (
     CACHE_BREAKPOINT,
     _build_template_vars,
@@ -132,74 +131,26 @@ def _skill_artifact() -> Artifact:
     )
 
 
-class _FakeStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        return None
-
-    def get_final_message(self) -> Any:
-        return self._response
-
-
-class _FakeClient:
-    def __init__(self, content: str) -> None:
-        self._content = content
-        self.messages = self
-        self.last_kwargs: dict[str, Any] | None = None
-
-    def stream(self, **kwargs: Any) -> _FakeStream:
-        self.last_kwargs = kwargs
-        return _FakeStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input={"content": self._content})],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(
-                    input_tokens=1000,
-                    output_tokens=500,
-                    cache_read_input_tokens=800,
-                    cache_creation_input_tokens=200,
-                ),
-            )
-        )
+_SYNC_USAGE = {
+    "input_tokens": 1000,
+    "output_tokens": 500,
+    "cache_read_input_tokens": 800,
+    "cache_creation_input_tokens": 200,
+}
+_ASYNC_USAGE = {
+    "input_tokens": 500,
+    "output_tokens": 300,
+    "cache_read_input_tokens": 400,
+    "cache_creation_input_tokens": 100,
+}
 
 
-class _FakeAsyncStream:
-    def __init__(self, response: Any) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _FakeAsyncStream:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> None:
-        return None
-
-    async def get_final_message(self) -> Any:
-        return self._response
+def _client(content: str) -> FakeClient:
+    return FakeClient({"content": content}, usage=_SYNC_USAGE)
 
 
-class _FakeAsyncClient:
-    def __init__(self, content: str) -> None:
-        self._content = content
-        self.messages = self
-
-    def stream(self, **kwargs: Any) -> _FakeAsyncStream:
-        return _FakeAsyncStream(
-            SimpleNamespace(
-                content=[SimpleNamespace(type="tool_use", input={"content": self._content})],
-                stop_reason="tool_use",
-                usage=SimpleNamespace(
-                    input_tokens=500,
-                    output_tokens=300,
-                    cache_read_input_tokens=400,
-                    cache_creation_input_tokens=100,
-                ),
-            )
-        )
+def _async_client(content: str) -> FakeAsyncClient:
+    return FakeAsyncClient({"content": content}, usage=_ASYNC_USAGE)
 
 
 def test_template_name_dispatch() -> None:
@@ -274,7 +225,7 @@ def test_generate_artifact_splits_on_cache_breakpoint() -> None:
     book = _book()
     sidecars = {"ch04": _sidecar("ch04")}
     plan = _plan([_reference_artifact()])
-    client = _FakeClient("# Service Objects\n\nGenerated body.")
+    client = _client("# Service Objects\n\nGenerated body.")
 
     result = generate_artifact(
         _reference_artifact(),
@@ -306,7 +257,7 @@ def test_generate_artifact_rejects_empty_content() -> None:
     book = _book()
     sidecars = {"ch04": _sidecar("ch04")}
     plan = _plan([_reference_artifact()])
-    client = _FakeClient("")
+    client = _client("")
 
     with pytest.raises(RuntimeError, match="empty or non-string"):
         generate_artifact(
@@ -337,7 +288,7 @@ def test_generate_artifact_warns_on_unresolved_feeds(
         brief="Brief about missing content.",
         feeds_from=["ch04.concepts", "ch99.concepts"],  # ch99 doesn't exist
     )
-    client = _FakeClient("# Generated body")
+    client = _client("# Generated body")
 
     with caplog.at_level("WARNING", logger="franklin.reducer.generators"):
         generate_artifact(
@@ -357,7 +308,7 @@ def test_generate_artifact_async_round_trip() -> None:
     book = _book()
     sidecars = {"ch04": _sidecar("ch04")}
     plan = _plan([_reference_artifact()])
-    client = _FakeAsyncClient("# Async Generated Content\n\nBody.")
+    client = _async_client("# Async Generated Content\n\nBody.")
 
     result = asyncio.run(
         generate_artifact_async(
@@ -379,7 +330,7 @@ def test_generate_artifact_uses_system_cache() -> None:
     book = _book()
     sidecars = {"ch04": _sidecar("ch04")}
     plan = _plan([_reference_artifact()])
-    client = _FakeClient("test content")
+    client = _client("test content")
 
     generate_artifact(
         _reference_artifact(),
