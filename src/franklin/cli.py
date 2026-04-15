@@ -79,8 +79,6 @@ from franklin.picker import (
     discover_books,
 )
 from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
-from franklin.planner import build_user_prompt as build_plan_prompt
-from franklin.planner import design_plan
 from franklin.publisher import PushError, push_plugin
 from franklin.reducer import DEFAULT_MODEL as REDUCER_DEFAULT_MODEL
 from franklin.review import apply_omissions, parse_omit_selection
@@ -103,6 +101,10 @@ from franklin.services import (
     ItemStart,
     MapInput,
     MapService,
+    NoSidecarsError,
+    PlanAlreadyExistsError,
+    PlanInput,
+    PlanService,
     ProgressEvent,
     RunNotIngestedError,
     StageFinish,
@@ -870,34 +872,30 @@ def plan_pipeline(
     ),
 ) -> None:
     """Design the plugin architecture from the distilled sidecars."""
-    run = RunDirectory(run_dir)
-    if not run.book_json.exists():
-        console.print(f"[red]error:[/red] no book.json in {run_dir} — run `franklin ingest` first")
-        raise typer.Exit(code=1)
+    service = PlanService()
+    params = PlanInput(run_dir=run_dir, model=model, force=force)
 
-    manifest = run.load_book()
-    sidecar_ids = [p.stem for p in sorted(run.chapters_dir.glob("*.json"))]
-    if not sidecar_ids:
+    try:
+        context = service.prepare(params)
+    except RunNotIngestedError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except NoSidecarsError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except PlanAlreadyExistsError as exc:
         console.print(
-            f"[red]error:[/red] no sidecars in {run.chapters_dir} — run `franklin map` first"
-        )
-        raise typer.Exit(code=1)
-
-    sidecars = [run.load_sidecar(cid) for cid in sidecar_ids]
-
-    if run.plan_json.exists() and not force:
-        console.print(
-            f"[yellow]plan.json already exists at {run.plan_json}[/yellow]\n"
+            f"[yellow]plan.json already exists at {exc.plan_path}[/yellow]\n"
             "  use --force to regenerate, or open it directly to edit"
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
     if dry_run:
-        prompt = build_plan_prompt(manifest, sidecars)
+        prompt = service.build_prompt(context.manifest, context.sidecars)
         console.print("[bold]Dry run[/bold] — plan prompt")
         console.print(f"  chars: {len(prompt):,}")
         console.print(f"  approx tokens: {len(prompt) // 4:,}")
-        console.print(f"  sidecars: {len(sidecars)}")
+        console.print(f"  sidecars: {len(context.sidecars)}")
         console.print()
         console.print(prompt)
         return
@@ -909,29 +907,17 @@ def plan_pipeline(
         raise typer.Exit(code=1) from exc
 
     console.print(
-        f"[bold]Designing plugin[/bold] for [cyan]{manifest.metadata.title}[/cyan] "
-        f"from {len(sidecars)} sidecars using [dim]{model}[/dim]"
+        f"[bold]Designing plugin[/bold] for [cyan]{context.manifest.metadata.title}[/cyan] "
+        f"from {len(context.sidecars)} sidecars using [dim]{model}[/dim]"
     )
     from rich.live import Live
     from rich.spinner import Spinner
 
     spinner = Spinner("aesthetic", text=" [dim]thinking...[/dim]")
     with Live(spinner, console=console, refresh_per_second=10, transient=True):
-        plan, in_toks, out_toks = design_plan(manifest, sidecars, model=model)
-    run.save_plan(plan)
+        result = service.run(params)
 
-    from franklin.estimate import _opus_cost
-
-    plan_cost = _opus_cost(in_toks, out_toks)
-    run.append_cost(
-        stage="plan",
-        model=model,
-        input_tokens=in_toks,
-        output_tokens=out_toks,
-        cost_usd=plan_cost,
-    )
-
-    _print_plan_summary(run, plan, in_toks, out_toks)
+    _print_plan_summary(context.run, result.plan, result.input_tokens, result.output_tokens)
 
 
 def _print_plan_summary(
