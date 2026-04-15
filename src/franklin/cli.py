@@ -6,8 +6,7 @@ a top-level `run` that chains them end-to-end.
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -232,38 +231,6 @@ def _slug_from_metadata(book_path: Path) -> str | None:
     if title and len(title.strip()) > 3:
         return slugify(title)
     return None
-
-
-@contextlib.contextmanager
-def _stage_progress(label: str) -> Iterator[tuple[Progress, TaskID]]:
-    """Rich Progress context shared by map, reduce, and cleanup stages.
-
-    Yields a ``(progress, task_id)`` tuple. Callers update ``task_id``
-    with ``advance=1`` and a ``last=...`` field per iteration; the bar
-    stays on one line and the `last` message shows the most recently
-    completed (or currently in-flight) item.
-    """
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn(f"[bold]{label}[/bold]"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("·"),
-        TimeElapsedColumn(),
-        TextColumn("·"),
-        TimeRemainingColumn(),
-        TextColumn("· [dim]{task.fields[last]}[/dim]"),
-        console=console,
-        transient=False,
-    )
-    with progress:
-        task_id = progress.add_task(label.lower(), total=0, last="starting…")
-        yield progress, task_id
-
-
-def _sonnet_cost_usd(input_tokens: int, output_tokens: int) -> float:
-    """Estimate USD cost for a pile of Sonnet tokens (post-call, not predictive)."""
-    return (input_tokens / 1_000_000) * 3.0 + (output_tokens / 1_000_000) * 15.0
 
 
 def _print_next_steps(
@@ -607,34 +574,39 @@ def _do_ingest_stage(
     _print_ingest_summary(RunDirectory(result.run_dir), result.manifest, result.chapters)
 
 
-class _IngestRenderer:
-    """Translates IngestService progress events into Rich output.
+class _StageRenderer:
+    """Base for the per-stage Rich progress bars.
 
-    The cleanup sub-stage owns a live Progress bar between its
-    ``stage_start`` and ``stage_finish`` events; the rest is line-at-a-
-    time console output. ``close()`` is defensive — if an exception
+    Handles the lifecycle that every stage renderer shares: filter
+    events to the stage this renderer is listening on, open a standard
+    Progress on ``stage_start``, advance on ``item_done``, close on
+    ``stage_finish``. ``close()`` is defensive — if an exception
     short-circuits the service, any open Progress is stopped cleanly.
+
+    Subclasses set ``stage`` and ``label`` (class attrs) and override
+    the ``_on_*`` hooks for stage-specific text. Override ``emit`` to
+    pick up out-of-band events (info/warning) the base doesn't handle.
     """
 
-    def __init__(self, *, clean_concurrency: int) -> None:
-        self._clean_concurrency = clean_concurrency
+    stage: str = ""
+    label: str = ""
+
+    def __init__(self) -> None:
         self._progress: Progress | None = None
         self._task_id: TaskID | None = None
 
     def emit(self, event: ProgressEvent) -> None:
-        if isinstance(event, StageStart) and event.stage == "cleanup":
-            self._open_cleanup_progress(total=event.total or 0)
-        elif isinstance(event, ItemDone) and event.stage == "cleanup":
-            self._advance_cleanup(event)
-        elif isinstance(event, StageFinish) and event.stage == "cleanup":
-            self._close_cleanup(event)
-        elif isinstance(event, WarningEvent) and event.stage == "cleanup":
-            console.print(f"  [yellow]{event.message}[/yellow]")
-        elif isinstance(event, InfoEvent) and event.stage == "ingest":
-            # Library-level info like "Ingesting <path>" is already
-            # printed by the CLI before the service runs; swallow it
-            # here to avoid double-printing the same line.
-            pass
+        if event.stage != self.stage:
+            return
+        if isinstance(event, StageStart):
+            self._open(event.total or 0)
+        elif isinstance(event, ItemStart):
+            self._on_item_start(event)
+        elif isinstance(event, ItemDone):
+            self._on_item_done(event)
+        elif isinstance(event, StageFinish):
+            self.close()
+            self._on_stage_finish(event)
 
     def close(self) -> None:
         if self._progress is not None:
@@ -642,20 +614,10 @@ class _IngestRenderer:
             self._progress = None
             self._task_id = None
 
-    def _open_cleanup_progress(self, *, total: int) -> None:
-        estimate = total * 0.08
-        console.print()
-        console.rule("[bold]Tier 4 cleanup[/bold]")
-        console.print(f"  about to send {total} chapters to Claude for mechanical cleanup")
-        console.print(f"  concurrency: [cyan]{self._clean_concurrency}[/cyan] in flight at once")
-        console.print(
-            f"  estimated cost: [yellow]~${estimate:.2f}[/yellow] total "
-            "(actual will vary with chapter length)"
-        )
-        console.print()
+    def _open(self, total: int) -> None:
         progress = Progress(
             SpinnerColumn(),
-            TextColumn("[bold]Cleaning[/bold]"),
+            TextColumn(f"[bold]{self.label}[/bold]"),
             BarColumn(),
             MofNCompleteColumn(),
             TextColumn("·"),
@@ -667,19 +629,70 @@ class _IngestRenderer:
             transient=False,
         )
         progress.start()
-        task_id = progress.add_task("cleaning", total=total, last="starting…")
         self._progress = progress
-        self._task_id = task_id
+        self._task_id = progress.add_task(self.label.lower(), total=total, last="starting…")
 
-    def _advance_cleanup(self, event: ItemDone) -> None:
-        if self._progress is None or self._task_id is None:
+    def _update(self, *, advance: int = 0, last: str) -> None:
+        if self._progress is not None and self._task_id is not None:
+            self._progress.update(self._task_id, advance=advance, last=last)
+
+    def _on_item_start(self, event: ItemStart) -> None:
+        """Hook: update ``last`` when an item begins. Default is a no-op."""
+
+    def _on_item_done(self, event: ItemDone) -> None:
+        """Hook: advance the bar when an item finishes. Default is a no-op."""
+
+    def _on_stage_finish(self, event: StageFinish) -> None:
+        """Hook: print a summary after the progress closes. Default is a no-op."""
+
+
+class _IngestRenderer(_StageRenderer):
+    """Renders the optional Tier 4 cleanup sub-stage inside ingest.
+
+    The ``ingest`` stage itself is line-at-a-time output (printed by
+    ``_do_ingest_stage`` before the service runs); only the cleanup
+    sub-stage owns a live Progress bar. We listen on ``cleanup`` so
+    the base-class lifecycle fires for it, with a custom prelude that
+    prints the rule + cost estimate before opening the bar.
+    """
+
+    stage = "cleanup"
+    label = "Cleaning"
+
+    def __init__(self, *, clean_concurrency: int) -> None:
+        super().__init__()
+        self._clean_concurrency = clean_concurrency
+
+    def emit(self, event: ProgressEvent) -> None:
+        if event.stage == "cleanup" and isinstance(event, WarningEvent):
+            console.print(f"  [yellow]{event.message}[/yellow]")
             return
+        if event.stage == "ingest" and isinstance(event, InfoEvent):
+            # Library-level info like "Ingesting <path>" is already
+            # printed by the CLI before the service runs; swallow to
+            # avoid double-printing the same line.
+            return
+        super().emit(event)
+
+    def _open(self, total: int) -> None:
+        estimate = total * 0.08
+        console.print()
+        console.rule("[bold]Tier 4 cleanup[/bold]")
+        console.print(f"  about to send {total} chapters to Claude for mechanical cleanup")
+        console.print(f"  concurrency: [cyan]{self._clean_concurrency}[/cyan] in flight at once")
+        console.print(
+            f"  estimated cost: [yellow]~${estimate:.2f}[/yellow] total "
+            "(actual will vary with chapter length)"
+        )
+        console.print()
+        super()._open(total)
+
+    def _on_item_done(self, event: ItemDone) -> None:
         marker = "⚠" if event.status == "fail" else "✓"
         suffix = " failed" if event.status == "fail" else ""
-        self._progress.update(self._task_id, advance=1, last=f"{marker} {event.item_id}{suffix}")
+        self._update(advance=1, last=f"{marker} {event.item_id}{suffix}")
 
-    def _close_cleanup(self, event: StageFinish) -> None:
-        self.close()
+    def _on_stage_finish(self, event: StageFinish) -> None:
         console.print()
         console.print(f"[green]✓[/green] cleanup complete: {event.summary or ''}")
 
@@ -841,63 +854,31 @@ def _dry_run_prompt(run: RunDirectory, manifest: BookManifest, chapter: Normaliz
     console.print(prompt)
 
 
-class _MapRenderer:
-    """Translate MapService progress events into the existing Rich bar."""
+class _MapRenderer(_StageRenderer):
+    """Translate MapService progress events into the Rich bar."""
 
-    def __init__(self) -> None:
-        self._progress: Progress | None = None
-        self._task_id: TaskID | None = None
+    stage = "map"
+    label = "Mapping"
 
     def emit(self, event: ProgressEvent) -> None:
-        if event.stage != "map":
-            return
-        if isinstance(event, InfoEvent):
+        if event.stage == "map" and isinstance(event, InfoEvent):
             console.print(f"  [dim]{event.message}[/dim]")
-        elif isinstance(event, StageStart):
-            self._open(total=event.total or 0)
-        elif isinstance(event, ItemStart):
-            if self._progress is not None and self._task_id is not None:
-                self._progress.update(self._task_id, last=f"-> {event.item_id}")
-        elif isinstance(event, ItemDone):
-            if self._progress is not None and self._task_id is not None:
-                detail = f" ({event.detail})" if event.detail else ""
-                self._progress.update(
-                    self._task_id,
-                    advance=1,
-                    last=f"v {event.item_id}{detail}",
-                )
-        elif isinstance(event, StageFinish):
-            self.close()
-            # Preserve the blank-line-then-summary layout users see today.
-            # The service's summary already covers counts + tokens + cost,
-            # so we just wrap it in the familiar green check + "map stage
-            # complete" prefix.
-            console.print()
-            console.print(f"[green]✓[/green] map stage complete: {event.summary or ''}")
+            return
+        super().emit(event)
 
-    def close(self) -> None:
-        if self._progress is not None:
-            self._progress.stop()
-            self._progress = None
-            self._task_id = None
+    def _on_item_start(self, event: ItemStart) -> None:
+        self._update(last=f"-> {event.item_id}")
 
-    def _open(self, *, total: int) -> None:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold]Mapping[/bold]"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("·"),
-            TimeElapsedColumn(),
-            TextColumn("·"),
-            TimeRemainingColumn(),
-            TextColumn("· [dim]{task.fields[last]}[/dim]"),
-            console=console,
-            transient=False,
-        )
-        progress.start()
-        self._progress = progress
-        self._task_id = progress.add_task("mapping", total=total, last="starting…")
+    def _on_item_done(self, event: ItemDone) -> None:
+        detail = f" ({event.detail})" if event.detail else ""
+        self._update(advance=1, last=f"v {event.item_id}{detail}")
+
+    def _on_stage_finish(self, event: StageFinish) -> None:
+        # Preserve the blank-line-then-summary layout users see today.
+        # The service's summary already covers counts + tokens + cost,
+        # so we just wrap it in the familiar green check prefix.
+        console.print()
+        console.print(f"[green]✓[/green] map stage complete: {event.summary or ''}")
 
 
 @app.command(name="plan")
@@ -1187,67 +1168,38 @@ def _invoke_reduce(
     return result
 
 
-class _ReduceRenderer:
-    """Translate ReduceService events into the existing Rich bar + summary."""
+class _ReduceRenderer(_StageRenderer):
+    """Translate ReduceService events into the Rich bar + multi-line summary."""
+
+    stage = "reduce"
+    label = "Reducing"
 
     def __init__(self, *, output_root: Path) -> None:
+        super().__init__()
         self._output_root = output_root
-        self._progress: Progress | None = None
-        self._task_id: TaskID | None = None
-        self._skipped_logged = False
 
-    def emit(self, event: ProgressEvent) -> None:
-        if event.stage != "reduce":
-            return
-        if isinstance(event, StageStart):
-            self._open(total=event.total or 0)
-        elif isinstance(event, ItemStart):
-            if self._progress is not None and self._task_id is not None:
-                label = event.label or event.item_id
-                self._progress.update(self._task_id, last=f"-> {label}")
-        elif isinstance(event, ItemDone):
-            if self._progress is not None and self._task_id is not None:
-                if event.status == "fail":
-                    marker = f"[red]x {event.item_id}: {event.detail}[/red]"
-                else:
-                    detail = f" ({event.detail})" if event.detail else ""
-                    marker = f"v {event.item_id}{detail}"
-                self._progress.update(self._task_id, advance=1, last=marker)
-        elif isinstance(event, StageFinish):
-            self.close()
-            console.print()
-            # The service's summary carries counts + tokens + cost in one
-            # line; wrap it in the two-line green-check layout users see.
-            if event.summary:
-                head, _, tail = event.summary.partition(" · ")
-                console.print(f"[green]✓[/green] reduce stage complete: {head}")
-                if tail:
-                    console.print(f"  [dim]{tail}[/dim]")
-                console.print(f"  plugin tree: [cyan]{self._output_root}[/cyan]")
+    def _on_item_start(self, event: ItemStart) -> None:
+        label = event.label or event.item_id
+        self._update(last=f"-> {label}")
 
-    def close(self) -> None:
-        if self._progress is not None:
-            self._progress.stop()
-            self._progress = None
-            self._task_id = None
+    def _on_item_done(self, event: ItemDone) -> None:
+        if event.status == "fail":
+            marker = f"[red]x {event.item_id}: {event.detail}[/red]"
+        else:
+            detail = f" ({event.detail})" if event.detail else ""
+            marker = f"v {event.item_id}{detail}"
+        self._update(advance=1, last=marker)
 
-    def _open(self, *, total: int) -> None:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold]Reducing[/bold]"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("·"),
-            TimeElapsedColumn(),
-            TextColumn("·"),
-            TimeRemainingColumn(),
-            TextColumn("· [dim]{task.fields[last]}[/dim]"),
-            console=console,
-            transient=False,
-        )
-        progress.start()
-        self._progress = progress
-        self._task_id = progress.add_task("reducing", total=total, last="starting…")
+    def _on_stage_finish(self, event: StageFinish) -> None:
+        console.print()
+        # The service's summary carries counts + tokens + cost in one
+        # line; split it into the two-line green-check layout users see.
+        if event.summary:
+            head, _, tail = event.summary.partition(" · ")
+            console.print(f"[green]✓[/green] reduce stage complete: {head}")
+            if tail:
+                console.print(f"  [dim]{tail}[/dim]")
+            console.print(f"  plugin tree: [cyan]{self._output_root}[/cyan]")
 
 
 @app.command(name="assemble")
