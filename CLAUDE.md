@@ -24,11 +24,12 @@ Run directories land in `./runs/<slug>/` — `book.json` plus `raw/chNN.json` pe
 
 ## Layout
 
-- `src/franklin/cli.py` — Typer entrypoint
-- `src/franklin/ingest/` — EPUB parsing
-- `src/franklin/llm/` — Anthropic client wrapper, prompt loader, prompts as markdown
-- `src/franklin/models/` — Pydantic schemas (chapters, extractions)
-- `tests/` — pytest
+- `src/franklin/cli.py` — Typer entrypoint; per-stage commands are thin shells over `_do_<stage>_stage` helpers.
+- `src/franklin/services/` — stage services (IngestService, MapService, PlanService, ReduceService, AssembleService). Each takes a Pydantic input, emits ProgressEvents via a callback, returns a Pydantic result. Independent of Typer/Rich — usable from non-CLI callers.
+- `src/franklin/ingest/`, `mapper/`, `planner/`, `reducer/`, `assembler/` — stage-pure primitives (parsers, LLM callers, validators). Services orchestrate; these do the work.
+- `src/franklin/llm/` — Anthropic client wrapper, prompt loader, prompts as markdown.
+- `src/franklin/schema.py` — Pydantic schemas (BookManifest, ChapterSidecar, PlanManifest, Artifact, etc.) — the contract between stages.
+- `tests/` — pytest. `test_golden_path.py` is the end-to-end regression oracle that threads all five stages with a scripted fake Anthropic client.
 
 ## Working preferences
 
