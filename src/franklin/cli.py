@@ -69,7 +69,6 @@ from franklin.license import login as license_login
 from franklin.license import logout as license_logout
 from franklin.license import status as license_status
 from franklin.license import whoami as license_whoami
-from franklin.llm import make_async_client
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt
 from franklin.picker import (
     ALL_FORMATS,
@@ -87,12 +86,12 @@ from franklin.schema import (
     ArtifactType,
     BookManifest,
     ChapterKind,
-    ChapterSidecar,
     NormalizedChapter,
     PlanManifest,
 )
 from franklin.secrets import MissingApiKeyError, ensure_anthropic_api_key
 from franklin.services import (
+    ArtifactNotFoundError,
     ChapterNotFoundError,
     InfoEvent,
     IngestInput,
@@ -101,14 +100,21 @@ from franklin.services import (
     ItemStart,
     MapInput,
     MapService,
+    NoPlanError,
     NoSidecarsError,
+    NoSidecarsForReduceError,
     PlanAlreadyExistsError,
     PlanInput,
     PlanService,
     ProgressEvent,
+    ReduceContext,
+    ReduceInput,
+    ReduceResult,
+    ReduceService,
     RunNotIngestedError,
     StageFinish,
     StageStart,
+    UnknownArtifactTypeError,
     WarningEvent,
 )
 
@@ -1016,22 +1022,42 @@ def reduce_pipeline(
     ),
 ) -> None:
     """Generate each artifact file from the plan using its feeds_from slice."""
-    run = RunDirectory(run_dir)
-    if not run.plan_json.exists():
-        console.print(f"[red]error:[/red] no plan.json in {run_dir} — run `franklin plan` first")
-        raise typer.Exit(code=1)
+    service = ReduceService()
+    params = ReduceInput(
+        run_dir=run_dir,
+        artifact_id=artifact,
+        type_filter=type_filter,
+        model=model,
+        force=force,
+        concurrency=concurrency,
+    )
 
-    manifest = run.load_book()
-    plan = run.load_plan()
-    sidecar_ids = [p.stem for p in sorted(run.chapters_dir.glob("*.json"))]
-    if not sidecar_ids:
-        console.print(
-            f"[red]error:[/red] no sidecars in {run.chapters_dir} — run `franklin map` first"
+    try:
+        context = service.prepare(params)
+    except NoPlanError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except NoSidecarsForReduceError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        targets = service.select_artifacts(
+            context.plan, artifact_id=artifact, type_filter=type_filter
         )
-        raise typer.Exit(code=1)
-    sidecars = {cid: run.load_sidecar(cid) for cid in sidecar_ids}
+    except ArtifactNotFoundError as exc:
+        console.print(
+            f"[red]error:[/red] no artifact with id {exc.artifact_id!r} in plan "
+            f"(available: {', '.join(exc.available)})"
+        )
+        raise typer.Exit(code=1) from exc
+    except UnknownArtifactTypeError as exc:
+        console.print(
+            f"[red]error:[/red] unknown artifact type {exc.requested!r} "
+            f"(valid: {', '.join(exc.valid)})"
+        )
+        raise typer.Exit(code=1) from exc
 
-    targets = _select_artifacts(plan, artifact, type_filter)
     if not targets:
         console.print("[yellow]no artifacts to generate[/yellow]")
         raise typer.Exit(code=0)
@@ -1042,11 +1068,9 @@ def reduce_pipeline(
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    _generate_artifacts(
-        run,
-        plan=plan,
-        book=manifest,
-        sidecars=sidecars,
+    _invoke_reduce(
+        service,
+        context=context,
         targets=targets,
         model=model,
         force=force,
@@ -1054,153 +1078,107 @@ def reduce_pipeline(
     )
 
 
-def _select_artifacts(
-    plan: PlanManifest,
-    artifact_id: str | None,
-    type_filter: str | None,
-) -> list[Artifact]:
-    if artifact_id is not None:
-        for art in plan.artifacts:
-            if art.id == artifact_id:
-                return [art]
-        console.print(
-            f"[red]error:[/red] no artifact with id {artifact_id!r} in plan "
-            f"(available: {', '.join(a.id for a in plan.artifacts)})"
-        )
-        raise typer.Exit(code=1)
-
-    if type_filter is not None:
-        try:
-            kind = ArtifactType(type_filter)
-        except ValueError:
-            valid = ", ".join(t.value for t in ArtifactType)
-            console.print(
-                f"[red]error:[/red] unknown artifact type {type_filter!r} (valid: {valid})"
-            )
-            raise typer.Exit(code=1) from None
-        return [a for a in plan.artifacts if a.type == kind]
-
-    return list(plan.artifacts)
-
-
-def _generate_artifacts(
-    run: RunDirectory,
+def _invoke_reduce(
+    service: ReduceService,
     *,
-    plan: PlanManifest,
-    book: BookManifest,
-    sidecars: dict[str, ChapterSidecar],
+    context: ReduceContext,
     targets: list[Artifact],
     model: str,
     force: bool,
     concurrency: int = _DEFAULT_REDUCE_CONCURRENCY,
-) -> None:
-    import asyncio
+) -> ReduceResult:
+    """Render the pre-stage header, run the service, render the summary.
 
-    from franklin.reducer import generate_artifact_async
-
-    output_root = run.output_dir / plan.plugin.name
-    output_root.mkdir(parents=True, exist_ok=True)
-
-    to_generate: list[Artifact] = []
-    skipped = 0
-    for artifact in targets:
-        out_path = output_root / artifact.path
-        if out_path.exists() and not force:
-            skipped += 1
-        else:
-            to_generate.append(artifact)
-
+    Shared by the ``reduce`` command and the ``fix`` regeneration loop;
+    both paths render the same output. Targets that already exist are
+    filtered inside the service, so the ``len(to_generate)`` vs
+    ``len(targets)`` distinction is intentionally blurred in the
+    header — users saw "Generating N artifacts" for the whole target
+    set historically, and that's what we keep here.
+    """
+    output_root = context.run.output_dir / context.plan.plugin.name
     console.print(
-        f"[bold]Generating[/bold] {len(to_generate)} artifacts for "
-        f"[cyan]{plan.plugin.name}[/cyan] using [dim]{model}[/dim]"
+        f"[bold]Generating[/bold] {len(targets)} artifacts for "
+        f"[cyan]{context.plan.plugin.name}[/cyan] using [dim]{model}[/dim]"
     )
     console.print(f"  output: {output_root}")
-    if skipped:
-        console.print(f"  [dim]{skipped} artifact(s) already exist, skipping[/dim]")
-    console.print()
 
-    if not to_generate:
-        console.print("[green]✓[/green] reduce stage complete: 0 generated, all skipped")
-        return
+    renderer = _ReduceRenderer(output_root=output_root)
+    try:
+        result = service.generate(
+            context,
+            targets,
+            model=model,
+            force=force,
+            concurrency=concurrency,
+            progress=renderer.emit,
+        )
+    finally:
+        renderer.close()
+    return result
 
-    totals: dict[str, int] = {
-        "input": 0,
-        "output": 0,
-        "cache_read": 0,
-        "cache_creation": 0,
-        "generated": 0,
-        "failed": 0,
-    }
-    llm = make_async_client()
 
-    async def _run() -> None:
-        sem = asyncio.Semaphore(concurrency)
+class _ReduceRenderer:
+    """Translate ReduceService events into the existing Rich bar + summary."""
 
-        async def one(artifact: Artifact) -> None:
-            async with sem:
-                progress.update(task_id, last=f"-> {artifact.type.value}:{artifact.id}")
-                try:
-                    result = await generate_artifact_async(
-                        artifact,
-                        plan=plan,
-                        book=book,
-                        sidecars=sidecars,
-                        client=llm,
-                        model=model,
-                    )
-                except Exception as exc:
-                    totals["failed"] += 1
-                    progress.update(
-                        task_id,
-                        advance=1,
-                        last=f"[red]x {artifact.id}: {exc}[/red]",
-                    )
-                    return
+    def __init__(self, *, output_root: Path) -> None:
+        self._output_root = output_root
+        self._progress: Progress | None = None
+        self._task_id: TaskID | None = None
+        self._skipped_logged = False
 
-                out_path = output_root / artifact.path
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_text(
-                    result.content if result.content.endswith("\n") else result.content + "\n"
-                )
+    def emit(self, event: ProgressEvent) -> None:
+        if event.stage != "reduce":
+            return
+        if isinstance(event, StageStart):
+            self._open(total=event.total or 0)
+        elif isinstance(event, ItemStart):
+            if self._progress is not None and self._task_id is not None:
+                label = event.label or event.item_id
+                self._progress.update(self._task_id, last=f"-> {label}")
+        elif isinstance(event, ItemDone):
+            if self._progress is not None and self._task_id is not None:
+                if event.status == "fail":
+                    marker = f"[red]x {event.item_id}: {event.detail}[/red]"
+                else:
+                    detail = f" ({event.detail})" if event.detail else ""
+                    marker = f"v {event.item_id}{detail}"
+                self._progress.update(self._task_id, advance=1, last=marker)
+        elif isinstance(event, StageFinish):
+            self.close()
+            console.print()
+            # The service's summary carries counts + tokens + cost in one
+            # line; wrap it in the two-line green-check layout users see.
+            if event.summary:
+                head, _, tail = event.summary.partition(" · ")
+                console.print(f"[green]✓[/green] reduce stage complete: {head}")
+                if tail:
+                    console.print(f"  [dim]{tail}[/dim]")
+                console.print(f"  plugin tree: [cyan]{self._output_root}[/cyan]")
 
-                totals["input"] += result.input_tokens
-                totals["output"] += result.output_tokens
-                totals["cache_read"] += result.cache_read_tokens
-                totals["cache_creation"] += result.cache_creation_tokens
-                totals["generated"] += 1
-                progress.update(
-                    task_id,
-                    advance=1,
-                    last=f"v {artifact.id} ({len(result.content):,} chars)",
-                )
+    def close(self) -> None:
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+            self._task_id = None
 
-        tasks = [one(a) for a in to_generate]
-        await asyncio.gather(*tasks)
-
-    with _stage_progress("Reducing") as (progress, task_id):
-        progress.update(task_id, total=len(to_generate))
-        asyncio.run(_run())
-
-    cost = _sonnet_cost_usd(totals["input"], totals["output"])
-    run.append_cost(
-        stage="reduce",
-        model=model,
-        input_tokens=totals["input"],
-        output_tokens=totals["output"],
-        cache_read_tokens=totals["cache_read"],
-        cost_usd=cost,
-    )
-    console.print()
-    console.print(
-        f"[green]✓[/green] reduce stage complete: "
-        f"{totals['generated']} generated, {skipped} skipped, "
-        f"{totals['failed']} failed"
-    )
-    console.print(
-        f"  [dim]{totals['input']:,} in / {totals['output']:,} out / "
-        f"{totals['cache_read']:,} cache-read · ${cost:.2f}[/dim]"
-    )
-    console.print(f"  plugin tree: [cyan]{output_root}[/cyan]")
+    def _open(self, *, total: int) -> None:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]Reducing[/bold]"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("·"),
+            TimeElapsedColumn(),
+            TextColumn("·"),
+            TimeRemainingColumn(),
+            TextColumn("· [dim]{task.fields[last]}[/dim]"),
+            console=console,
+            transient=False,
+        )
+        progress.start()
+        self._progress = progress
+        self._task_id = progress.add_task("reducing", total=total, last="starting…")
 
 
 @app.command(name="assemble")
@@ -1912,14 +1890,13 @@ def fix_command(
             break
 
         console.print()
-        _generate_artifacts(
-            run,
-            plan=plan,
-            book=book,
-            sidecars=sidecars,
+        _invoke_reduce(
+            ReduceService(),
+            context=ReduceContext(run=run, plan=plan, book=book, sidecars=sidecars),
             targets=targets,
             model=model,
             force=True,
+            concurrency=_DEFAULT_REDUCE_CONCURRENCY,
         )
 
         # Re-assemble to get fresh grade

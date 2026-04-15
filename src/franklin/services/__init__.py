@@ -41,8 +41,19 @@ from franklin.services.plan import (
     PlanResult,
     PlanService,
 )
+from franklin.services.reduce import (
+    ArtifactNotFoundError,
+    NoPlanError,
+    NoSidecarsForReduceError,
+    ReduceContext,
+    ReduceInput,
+    ReduceResult,
+    ReduceService,
+    UnknownArtifactTypeError,
+)
 
 __all__ = [
+    "ArtifactNotFoundError",
     "ChapterNotFoundError",
     "CleanupStats",
     "InfoEvent",
@@ -56,7 +67,9 @@ __all__ = [
     "MapResult",
     "MapService",
     "MetadataConfirmHook",
+    "NoPlanError",
     "NoSidecarsError",
+    "NoSidecarsForReduceError",
     "PlanAlreadyExistsError",
     "PlanContext",
     "PlanInput",
@@ -64,10 +77,15 @@ __all__ = [
     "PlanService",
     "ProgressCallback",
     "ProgressEvent",
+    "ReduceContext",
+    "ReduceInput",
+    "ReduceResult",
+    "ReduceService",
     "RunNotIngestedError",
     "StageFinish",
     "StageStart",
     "TargetSelection",
+    "UnknownArtifactTypeError",
     "WarningEvent",
     "progress_event_adapter",
 ]
