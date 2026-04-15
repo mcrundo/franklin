@@ -24,6 +24,7 @@ from franklin.llm import (
     text_block,
 )
 from franklin.llm.client import DEFAULT_MAX_TOKENS
+from franklin.llm.models import REDUCE_MODEL
 from franklin.reducer.resolver import ResolvedContext, resolve_feeds
 from franklin.schema import (
     Artifact,
@@ -35,7 +36,7 @@ from franklin.schema import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = REDUCE_MODEL
 CACHE_BREAKPOINT = "<!-- CACHE-BREAKPOINT -->"
 
 _TOOL_NAME = "save_artifact_file"

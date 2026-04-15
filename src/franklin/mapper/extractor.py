@@ -26,6 +26,7 @@ from franklin.llm import (
     validate_with_extra_recovery,
 )
 from franklin.llm.client import DEFAULT_MAX_TOKENS
+from franklin.llm.models import MAP_MODEL
 from franklin.schema import (
     BookManifest,
     ChapterExtraction,
@@ -34,7 +35,7 @@ from franklin.schema import (
     NormalizedChapter,
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = MAP_MODEL
 
 # When the LLM returns a payload that fails ChapterExtraction validation
 # (most commonly a stringified JSON list it couldn't stuff into a real

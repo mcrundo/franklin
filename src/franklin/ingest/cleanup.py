@@ -29,11 +29,11 @@ from franklin.llm import (
     render_prompt,
 )
 from franklin.llm.client import DEFAULT_MAX_TOKENS
+from franklin.llm.models import CLEANUP_MODEL
 from franklin.schema import NormalizedChapter
 
 DEFAULT_CLEANUP_CONCURRENCY = 8
-
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = CLEANUP_MODEL
 
 _TOOL_NAME = "save_cleaned_chapter"
 _TOOL_DESCRIPTION = (

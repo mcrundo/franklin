@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from franklin.checkpoint import slugify
 from franklin.llm import call_tool, make_client, render_prompt, validate_with_extra_recovery
 from franklin.llm.client import DEFAULT_MAX_TOKENS
+from franklin.llm.models import PLAN_MODEL
 from franklin.schema import (
     BookManifest,
     ChapterSidecar,
@@ -24,7 +25,7 @@ from franklin.schema import (
     PlanProposal,
 )
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = PLAN_MODEL
 
 _TOOL_NAME = "save_plan_proposal"
 _TOOL_DESCRIPTION = (
