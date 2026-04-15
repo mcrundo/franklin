@@ -323,6 +323,76 @@ def test_extract_chapter_recovers_from_stringified_json_list(
     assert any("stringified JSON" in r.message for r in caplog.records)
 
 
+class _SequenceClient:
+    """Fake client that returns a different payload on each call."""
+
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        self._payloads = list(payloads)
+        self.messages = self
+        self.call_count = 0
+
+    def stream(self, **kwargs: Any) -> _FakeStream:
+        payload = self._payloads[self.call_count]
+        self.call_count += 1
+        return _FakeStream(
+            SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input=payload)],
+                stop_reason="tool_use",
+                usage=SimpleNamespace(input_tokens=10, output_tokens=20),
+            )
+        )
+
+
+def test_extract_chapter_retries_on_validation_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A transient invalid payload should be retried, not fatally raised."""
+    bad = {"concepts": [{"id": "missing fields"}]}
+    good = {"summary": "Recovered on retry."}
+    client = _SequenceClient([bad, good])
+
+    with caplog.at_level("WARNING", logger="franklin.mapper.extractor"):
+        sidecar, in_toks, out_toks = extract_chapter(_book(), _chapter(), client=client)
+
+    assert client.call_count == 2
+    assert sidecar.summary == "Recovered on retry."
+    # Token counts accumulate across retries so callers see the true cost.
+    assert in_toks == 20
+    assert out_toks == 40
+    assert any("retrying" in r.message for r in caplog.records)
+
+
+def test_extract_chapter_gives_up_after_max_attempts() -> None:
+    bad = {"concepts": [{"id": "missing fields"}]}
+    client = _SequenceClient([bad, bad, bad])
+    with pytest.raises(RuntimeError, match="after 3 attempts"):
+        extract_chapter(_book(), _chapter(), client=client)
+    assert client.call_count == 3
+
+
+def test_extract_chapter_recovers_from_stringified_json_with_literal_newlines(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stringified JSON list with unescaped newlines inside string values
+    is invalid per spec but common from LLMs — the lenient parser should
+    still recover it instead of forcing a retry."""
+    payload = {
+        "summary": "Stringified payload with literal newlines.",
+        "anti_patterns": (
+            '[\n  {\n    "id": "ch03.anti.x",\n    "name": "Newline",\n    '
+            '"description": "Has a\nliteral newline inside",\n    '
+            '"fix": "Escape it",\n    "source_location": "ch03 §1"\n  }\n]'
+        ),
+    }
+    client = _FakeClient(payload)
+
+    with caplog.at_level("WARNING", logger="franklin.llm.validation"):
+        sidecar, _, _ = extract_chapter(_book(), _chapter(), client=client)
+
+    assert len(sidecar.anti_patterns) == 1
+    assert sidecar.anti_patterns[0].name == "Newline"
+
+
 def test_extract_chapter_still_rejects_non_extra_errors() -> None:
     """Missing required fields are NOT recoverable — only stray extras are."""
     payload = {

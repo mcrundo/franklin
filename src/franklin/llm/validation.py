@@ -83,10 +83,7 @@ def _fix_stringified_json(payload: Any, label: str) -> Any:
     fixed: list[str] = []
     for key, value in payload.items():
         if isinstance(value, str) and value.strip()[:1] in ("[", "{"):
-            try:
-                parsed = json.loads(value)
-            except (json.JSONDecodeError, ValueError):
-                continue
+            parsed = _loads_lenient(value)
             if isinstance(parsed, (list, dict)):
                 payload[key] = parsed
                 fixed.append(key)
@@ -98,6 +95,24 @@ def _fix_stringified_json(payload: Any, label: str) -> Any:
             ", ".join(fixed),
         )
     return payload
+
+
+def _loads_lenient(value: str) -> Any:
+    """Parse a JSON string, tolerating literal control characters in strings.
+
+    LLMs sometimes return a stringified JSON blob containing raw newlines
+    or tabs inside string values — invalid per spec, but parseable with
+    ``strict=False``. If even that fails, returns None so the caller can
+    leave the value alone and let Pydantic surface the real error.
+    """
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    try:
+        return json.loads(value, strict=False)
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 def _delete_at_path(payload: Any, loc: tuple[Any, ...] | list[Any]) -> bool:

@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `franklin --version` prints the installed version and exits.
 
+### Fixed
+
+- `franklin map` no longer aborts the whole run when the LLM returns an
+  invalid `ChapterExtraction` payload. The mapper now retries the tool
+  call up to 3 times on `ValidationError` (accumulating token counts
+  across attempts) before giving up, and the stringified-JSON recovery
+  path now tolerates literal control characters inside string values
+  (the most common cause of the failure). Fixes #30.
+
 ## [0.4.3] - 2026-04-13
 
 ### Fixed
