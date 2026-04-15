@@ -547,6 +547,26 @@ def ingest(
     ),
 ) -> None:
     """Parse a book file (EPUB or PDF) into normalized chapters and a partial book.json."""
+    _do_ingest_stage(
+        book_path=book_path,
+        output=output,
+        yes_i_know_pdfs=yes_i_know_pdfs,
+        clean=clean,
+        clean_concurrency=clean_concurrency,
+        yes=yes,
+    )
+
+
+def _do_ingest_stage(
+    *,
+    book_path: Path,
+    output: Path | None,
+    yes_i_know_pdfs: bool,
+    clean: bool,
+    clean_concurrency: int,
+    yes: bool,
+) -> None:
+    """Shared ingest implementation used by the ``ingest`` command and ``run_pipeline``."""
     run_dir = _resolve_run_dir(book_path, output).root
 
     is_pdf = book_path.suffix.lower() == ".pdf"
@@ -752,6 +772,26 @@ def map_chapters(
     ),
 ) -> None:
     """Run the map stage: per-chapter structured extraction via the LLM."""
+    _do_map_stage(
+        run_dir=run_dir,
+        chapter=chapter,
+        model=model,
+        dry_run=dry_run,
+        force=force,
+        concurrency=concurrency,
+    )
+
+
+def _do_map_stage(
+    *,
+    run_dir: Path,
+    chapter: str | None,
+    model: str,
+    dry_run: bool,
+    force: bool,
+    concurrency: int,
+) -> None:
+    """Shared map implementation used by the ``map`` command and ``run_pipeline``."""
     service = MapService()
     params = MapInput(
         run_dir=run_dir,
@@ -876,6 +916,17 @@ def plan_pipeline(
     ),
 ) -> None:
     """Design the plugin architecture from the distilled sidecars."""
+    _do_plan_stage(run_dir=run_dir, model=model, dry_run=dry_run, force=force)
+
+
+def _do_plan_stage(
+    *,
+    run_dir: Path,
+    model: str,
+    dry_run: bool,
+    force: bool,
+) -> None:
+    """Shared plan implementation used by the ``plan`` command and ``run_pipeline``."""
     service = PlanService()
     params = PlanInput(run_dir=run_dir, model=model, force=force)
 
@@ -1020,6 +1071,26 @@ def reduce_pipeline(
     ),
 ) -> None:
     """Generate each artifact file from the plan using its feeds_from slice."""
+    _do_reduce_stage(
+        run_dir=run_dir,
+        artifact=artifact,
+        type_filter=type_filter,
+        model=model,
+        force=force,
+        concurrency=concurrency,
+    )
+
+
+def _do_reduce_stage(
+    *,
+    run_dir: Path,
+    artifact: str | None,
+    type_filter: str | None,
+    model: str,
+    force: bool,
+    concurrency: int,
+) -> None:
+    """Shared reduce implementation used by the ``reduce`` command and ``run_pipeline``."""
     service = ReduceService()
     params = ReduceInput(
         run_dir=run_dir,
@@ -1191,6 +1262,11 @@ def assemble_pipeline(
     ),
 ) -> None:
     """Assemble the generated plugin tree: write plugin.json and report."""
+    _do_assemble_stage(run_dir=run_dir, zip_archive=zip_archive)
+
+
+def _do_assemble_stage(*, run_dir: Path, zip_archive: bool) -> None:
+    """Shared assemble implementation used by the ``assemble`` command and ``run_pipeline``."""
     try:
         result = AssembleService().run(AssembleInput(run_dir=run_dir, zip_archive=zip_archive))
     except NoPlanError as exc:
@@ -2182,10 +2258,13 @@ def run_pipeline(
         console.print(f"  [yellow]--push[/yellow]: publish to {repo} on branch {branch}")
     console.print()
 
+    # Compose the stage services directly. Each lambda builds the right
+    # input and invokes the shared `_do_*_stage` helper used by the
+    # per-stage Typer commands — no Typer dispatch detour.
     stages: list[tuple[str, Callable[[], None]]] = [
         (
             "ingest",
-            lambda: ingest(
+            lambda: _do_ingest_stage(
                 book_path=book_path,
                 output=run.root,
                 yes_i_know_pdfs=False,
@@ -2196,7 +2275,7 @@ def run_pipeline(
         ),
         (
             "map",
-            lambda: map_chapters(
+            lambda: _do_map_stage(
                 run_dir=run.root,
                 chapter=None,
                 model=DEFAULT_MODEL,
@@ -2207,7 +2286,7 @@ def run_pipeline(
         ),
         (
             "plan",
-            lambda: plan_pipeline(
+            lambda: _do_plan_stage(
                 run_dir=run.root,
                 model=PLANNER_DEFAULT_MODEL,
                 dry_run=False,
@@ -2216,7 +2295,7 @@ def run_pipeline(
         ),
         (
             "reduce",
-            lambda: reduce_pipeline(
+            lambda: _do_reduce_stage(
                 run_dir=run.root,
                 artifact=None,
                 type_filter=None,
@@ -2225,7 +2304,7 @@ def run_pipeline(
                 concurrency=_DEFAULT_REDUCE_CONCURRENCY,
             ),
         ),
-        ("assemble", lambda: assemble_pipeline(run_dir=run.root, zip_archive=False)),
+        ("assemble", lambda: _do_assemble_stage(run_dir=run.root, zip_archive=False)),
     ]
     # Gate 2: post-map summary before the Opus plan call. Always inserted
     # unless --yes auto-confirms (scripted use) or --force (rebuilding).

@@ -83,15 +83,20 @@ def stage_mocks() -> dict[str, MagicMock]:
 
 
 def _patch_stages(stage_mocks: dict[str, MagicMock]) -> Any:
-    """Return a single context manager that patches every stage function."""
+    """Return a single context manager that patches every stage function.
+
+    After RUB-103 ``run_pipeline`` calls the per-stage ``_do_*_stage``
+    helpers directly rather than dispatching through the Typer commands,
+    so the patch targets the helpers. Push is still a Typer command.
+    """
     from contextlib import ExitStack
 
     stack = ExitStack()
-    stack.enter_context(patch("franklin.cli.ingest", stage_mocks["ingest"]))
-    stack.enter_context(patch("franklin.cli.map_chapters", stage_mocks["map"]))
-    stack.enter_context(patch("franklin.cli.plan_pipeline", stage_mocks["plan"]))
-    stack.enter_context(patch("franklin.cli.reduce_pipeline", stage_mocks["reduce"]))
-    stack.enter_context(patch("franklin.cli.assemble_pipeline", stage_mocks["assemble"]))
+    stack.enter_context(patch("franklin.cli._do_ingest_stage", stage_mocks["ingest"]))
+    stack.enter_context(patch("franklin.cli._do_map_stage", stage_mocks["map"]))
+    stack.enter_context(patch("franklin.cli._do_plan_stage", stage_mocks["plan"]))
+    stack.enter_context(patch("franklin.cli._do_reduce_stage", stage_mocks["reduce"]))
+    stack.enter_context(patch("franklin.cli._do_assemble_stage", stage_mocks["assemble"]))
     stack.enter_context(patch("franklin.cli.push_command", stage_mocks["push"]))
     return stack
 
@@ -394,11 +399,11 @@ def test_run_push_surfaces_license_gate_error_after_assembly(
     fake_push_plugin = MagicMock()
 
     with (
-        patch("franklin.cli.ingest", MagicMock()),
-        patch("franklin.cli.map_chapters", MagicMock()),
-        patch("franklin.cli.plan_pipeline", MagicMock()),
-        patch("franklin.cli.reduce_pipeline", MagicMock()),
-        patch("franklin.cli.assemble_pipeline", MagicMock()),
+        patch("franklin.cli._do_ingest_stage", MagicMock()),
+        patch("franklin.cli._do_map_stage", MagicMock()),
+        patch("franklin.cli._do_plan_stage", MagicMock()),
+        patch("franklin.cli._do_reduce_stage", MagicMock()),
+        patch("franklin.cli._do_assemble_stage", MagicMock()),
         patch("franklin.cli.push_plugin", fake_push_plugin),
         pytest.raises(typer.Exit),
     ):
