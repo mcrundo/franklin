@@ -447,9 +447,7 @@ _FIX_SCORE_THRESHOLD = 0.83  # below B
 @app.command(name="fix")
 def fix_command(
     run_dir: Path = typer.Argument(..., exists=True, file_okay=False, help="Run directory to fix"),
-    model: str = typer.Option(
-        REDUCE_MODEL, "--model", help="Anthropic model ID for regeneration"
-    ),
+    model: str = typer.Option(REDUCE_MODEL, "--model", help="Anthropic model ID for regeneration"),
     threshold: float = typer.Option(
         _FIX_SCORE_THRESHOLD,
         "--threshold",

@@ -1374,7 +1374,6 @@ def _print_frontmatter_issues(plugin_root: Path, issues: list[FrontmatterIssue])
     console.print(table)
 
 
-
 def _run_gate_two(run_dir: Path) -> None:
     """Post-map, pre-plan gate: show what the map extracted before the Opus call.
 
