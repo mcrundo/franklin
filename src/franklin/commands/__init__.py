@@ -12,6 +12,12 @@ Submodule layout:
   ``license login/logout/whoami/status``.
 """
 
-from franklin.commands import diagnostics, operations, pick, publishing
+from franklin.commands import (
+    diagnostics,
+    operations,
+    pick,
+    publishing,
+    stages,
+)
 
-__all__ = ["diagnostics", "operations", "pick", "publishing"]
+__all__ = ["diagnostics", "operations", "pick", "publishing", "stages"]

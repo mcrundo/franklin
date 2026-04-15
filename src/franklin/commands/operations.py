@@ -19,13 +19,9 @@ import typer
 from rich.table import Table
 
 from franklin.checkpoint import RunDirectory
-from franklin.cli import (
-    _DEFAULT_REDUCE_CONCURRENCY,
-    _invoke_reduce,
-    _resolve_run_dir,
-    app,
-)
+from franklin.cli import _resolve_run_dir, app
 from franklin.cli import console as console
+from franklin.commands.stages import _DEFAULT_REDUCE_CONCURRENCY, _invoke_reduce
 from franklin.grading import RunGrade, grade_run
 from franklin.inspector import (
     ChapterInspection,
@@ -461,9 +457,9 @@ def fix_command(
     and shows the new grade. Loops until you're satisfied or everything
     is above the threshold.
     """
-    # Deferred import: cli imports commands at the bottom of its module body,
-    # so we can't top-level import assemble_pipeline from cli without a cycle.
-    from franklin.cli import assemble_pipeline
+    # Deferred: stages imports cli, so top-level import of assemble_pipeline
+    # would race the cli → commands.stages registration cycle.
+    from franklin.commands.stages import assemble_pipeline
 
     run = RunDirectory(run_dir)
     if not run.plan_json.exists():
