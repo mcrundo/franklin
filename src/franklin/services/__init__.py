@@ -33,6 +33,14 @@ from franklin.services.map import (
     RunNotIngestedError,
     TargetSelection,
 )
+from franklin.services.plan import (
+    NoSidecarsError,
+    PlanAlreadyExistsError,
+    PlanContext,
+    PlanInput,
+    PlanResult,
+    PlanService,
+)
 
 __all__ = [
     "ChapterNotFoundError",
@@ -48,6 +56,12 @@ __all__ = [
     "MapResult",
     "MapService",
     "MetadataConfirmHook",
+    "NoSidecarsError",
+    "PlanAlreadyExistsError",
+    "PlanContext",
+    "PlanInput",
+    "PlanResult",
+    "PlanService",
     "ProgressCallback",
     "ProgressEvent",
     "RunNotIngestedError",
