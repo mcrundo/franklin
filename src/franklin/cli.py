@@ -1192,9 +1192,7 @@ def assemble_pipeline(
 ) -> None:
     """Assemble the generated plugin tree: write plugin.json and report."""
     try:
-        result = AssembleService().run(
-            AssembleInput(run_dir=run_dir, zip_archive=zip_archive)
-        )
+        result = AssembleService().run(AssembleInput(run_dir=run_dir, zip_archive=zip_archive))
     except NoPlanError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
