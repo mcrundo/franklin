@@ -6,8 +6,7 @@ a top-level `run` that chains them end-to-end.
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -232,38 +231,6 @@ def _slug_from_metadata(book_path: Path) -> str | None:
     if title and len(title.strip()) > 3:
         return slugify(title)
     return None
-
-
-@contextlib.contextmanager
-def _stage_progress(label: str) -> Iterator[tuple[Progress, TaskID]]:
-    """Rich Progress context shared by map, reduce, and cleanup stages.
-
-    Yields a ``(progress, task_id)`` tuple. Callers update ``task_id``
-    with ``advance=1`` and a ``last=...`` field per iteration; the bar
-    stays on one line and the `last` message shows the most recently
-    completed (or currently in-flight) item.
-    """
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn(f"[bold]{label}[/bold]"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("·"),
-        TimeElapsedColumn(),
-        TextColumn("·"),
-        TimeRemainingColumn(),
-        TextColumn("· [dim]{task.fields[last]}[/dim]"),
-        console=console,
-        transient=False,
-    )
-    with progress:
-        task_id = progress.add_task(label.lower(), total=0, last="starting…")
-        yield progress, task_id
-
-
-def _sonnet_cost_usd(input_tokens: int, output_tokens: int) -> float:
-    """Estimate USD cost for a pile of Sonnet tokens (post-call, not predictive)."""
-    return (input_tokens / 1_000_000) * 3.0 + (output_tokens / 1_000_000) * 15.0
 
 
 def _print_next_steps(
