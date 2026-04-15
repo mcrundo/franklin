@@ -399,7 +399,6 @@ def _maybe_prompt_resume(run_dir: Path, *, yes: bool) -> None:
         raise typer.Exit(code=0)
 
 
-
 def _run_gate_two(run_dir: Path) -> None:
     """Post-map, pre-plan gate: show what the map extracted before the Opus call.
 
