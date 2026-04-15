@@ -27,7 +27,7 @@ ItemStatus = Literal["ok", "skip", "fail"]
 
 
 class _Event(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     stage: str
     ts: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
@@ -74,17 +74,3 @@ ProgressEvent = Annotated[
 ProgressCallback = Callable[[ProgressEvent], None]
 
 progress_event_adapter: TypeAdapter[ProgressEvent] = TypeAdapter(ProgressEvent)
-
-
-__all__ = [
-    "InfoEvent",
-    "ItemDone",
-    "ItemStart",
-    "ItemStatus",
-    "ProgressCallback",
-    "ProgressEvent",
-    "StageFinish",
-    "StageStart",
-    "WarningEvent",
-    "progress_event_adapter",
-]
