@@ -164,7 +164,7 @@ class ReduceService:
 
         return list(plan.artifacts)
 
-    def generate(
+    async def generate_async(
         self,
         context: ReduceContext,
         targets: list[Artifact],
@@ -175,8 +175,9 @@ class ReduceService:
         progress: ProgressCallback | None = None,
         client: Any | None = None,
     ) -> ReduceResult:
-        """Generate the given artifacts to disk.
+        """Async implementation — safe to call from an existing event loop.
 
+        The sync ``generate`` delegates here via ``asyncio.run``.
         Used both by ``run`` and by the ``fix`` CLI command which
         pre-resolves its targets from a grade report.
         """
@@ -224,64 +225,58 @@ class ReduceService:
             "generated": 0,
             "failed": 0,
         }
+        sem = asyncio.Semaphore(concurrency)
 
-        async def run_all() -> None:
-            sem = asyncio.Semaphore(concurrency)
-
-            async def one(artifact: Artifact) -> None:
-                async with sem:
-                    emit(
-                        ItemStart(
-                            stage=_STAGE,
-                            item_id=artifact.id,
-                            label=f"{artifact.type.value}:{artifact.id}",
-                        )
+        async def one(artifact: Artifact) -> None:
+            async with sem:
+                emit(
+                    ItemStart(
+                        stage=_STAGE,
+                        item_id=artifact.id,
+                        label=f"{artifact.type.value}:{artifact.id}",
                     )
-                    try:
-                        result = await generate_artifact_async(
-                            artifact,
-                            plan=context.plan,
-                            book=context.book,
-                            sidecars=context.sidecars,
-                            client=llm,
-                            model=model,
-                        )
-                    except Exception as exc:  # non-fatal: record + keep going
-                        totals["failed"] += 1
-                        emit(
-                            ItemDone(
-                                stage=_STAGE,
-                                item_id=artifact.id,
-                                status="fail",
-                                detail=str(exc),
-                            )
-                        )
-                        return
-
-                    out_path = output_root / artifact.path
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    body = (
-                        result.content if result.content.endswith("\n") else result.content + "\n"
+                )
+                try:
+                    result = await generate_artifact_async(
+                        artifact,
+                        plan=context.plan,
+                        book=context.book,
+                        sidecars=context.sidecars,
+                        client=llm,
+                        model=model,
                     )
-                    out_path.write_text(body)
-
-                    totals["input"] += result.input_tokens
-                    totals["output"] += result.output_tokens
-                    totals["cache_read"] += result.cache_read_tokens
-                    totals["cache_creation"] += result.cache_creation_tokens
-                    totals["generated"] += 1
+                except Exception as exc:  # non-fatal: record + keep going
+                    totals["failed"] += 1
                     emit(
                         ItemDone(
                             stage=_STAGE,
                             item_id=artifact.id,
-                            status="ok",
-                            detail=f"{len(result.content):,} chars",
+                            status="fail",
+                            detail=str(exc),
                         )
                     )
+                    return
 
-            await asyncio.gather(*(one(a) for a in to_generate))
+                out_path = output_root / artifact.path
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                body = result.content if result.content.endswith("\n") else result.content + "\n"
+                out_path.write_text(body)
 
-        asyncio.run(run_all())
+                totals["input"] += result.input_tokens
+                totals["output"] += result.output_tokens
+                totals["cache_read"] += result.cache_read_tokens
+                totals["cache_creation"] += result.cache_creation_tokens
+                totals["generated"] += 1
+                emit(
+                    ItemDone(
+                        stage=_STAGE,
+                        item_id=artifact.id,
+                        status="ok",
+                        detail=f"{len(result.content):,} chars",
+                    )
+                )
+
+        await asyncio.gather(*(one(a) for a in to_generate))
 
         cost = _sonnet_cost_usd(totals["input"], totals["output"])
         context.run.append_cost(
@@ -314,6 +309,30 @@ class ReduceService:
             cache_read_tokens=totals["cache_read"],
             cache_creation_tokens=totals["cache_creation"],
             cost_usd=cost,
+        )
+
+    def generate(
+        self,
+        context: ReduceContext,
+        targets: list[Artifact],
+        *,
+        model: str = DEFAULT_MODEL,
+        force: bool = False,
+        concurrency: int = 3,
+        progress: ProgressCallback | None = None,
+        client: Any | None = None,
+    ) -> ReduceResult:
+        """Sync wrapper — calls ``generate_async`` via ``asyncio.run``."""
+        return asyncio.run(
+            self.generate_async(
+                context,
+                targets,
+                model=model,
+                force=force,
+                concurrency=concurrency,
+                progress=progress,
+                client=client,
+            )
         )
 
     def run(
