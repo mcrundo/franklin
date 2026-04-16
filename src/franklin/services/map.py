@@ -138,13 +138,17 @@ class MapService:
         """Render the user prompt for a chapter without calling the LLM."""
         return build_user_prompt(manifest, chapter)
 
-    def run(
+    async def run_async(
         self,
         params: MapInput,
         *,
         progress: ProgressCallback | None = None,
         client: Any | None = None,
     ) -> MapResult:
+        """Async implementation — safe to call from an existing event loop.
+
+        The sync ``run`` delegates here via ``asyncio.run``.
+        """
         emit = progress or (lambda _event: None)
 
         selection = self.select_targets(params)
@@ -196,7 +200,7 @@ class MapService:
         emit(StageStart(stage=_STAGE, total=len(to_extract)))
 
         llm = client if client is not None else make_async_client()
-        total_in, total_out, extracted = self._extract_concurrently(
+        total_in, total_out, extracted = await self._extract_async(
             manifest=manifest,
             run=run,
             to_extract=to_extract,
@@ -231,8 +235,22 @@ class MapService:
             cost_usd=cost,
         )
 
+    def run(
+        self,
+        params: MapInput,
+        *,
+        progress: ProgressCallback | None = None,
+        client: Any | None = None,
+    ) -> MapResult:
+        """Sync wrapper — calls ``run_async`` via ``asyncio.run``.
+
+        Use ``run_async`` directly when an event loop is already running
+        (e.g. inside a FastAPI handler).
+        """
+        return asyncio.run(self.run_async(params, progress=progress, client=client))
+
     @staticmethod
-    def _extract_concurrently(
+    async def _extract_async(
         *,
         manifest: BookManifest,
         run: RunDirectory,
@@ -245,34 +263,29 @@ class MapService:
         total_in = 0
         total_out = 0
         extracted = 0
+        sem = asyncio.Semaphore(concurrency)
 
-        async def run_all() -> None:
+        async def one(chapter: NormalizedChapter) -> None:
             nonlocal total_in, total_out, extracted
-            sem = asyncio.Semaphore(concurrency)
-
-            async def one(chapter: NormalizedChapter) -> None:
-                nonlocal total_in, total_out, extracted
-                async with sem:
-                    emit(ItemStart(stage=_STAGE, item_id=chapter.chapter_id))
-                    sidecar, in_toks, out_toks = await extract_chapter_async(
-                        manifest, chapter, model=model, client=client
+            async with sem:
+                emit(ItemStart(stage=_STAGE, item_id=chapter.chapter_id))
+                sidecar, in_toks, out_toks = await extract_chapter_async(
+                    manifest, chapter, model=model, client=client
+                )
+                run.save_sidecar(sidecar)
+                total_in += in_toks
+                total_out += out_toks
+                extracted += 1
+                emit(
+                    ItemDone(
+                        stage=_STAGE,
+                        item_id=chapter.chapter_id,
+                        status="ok",
+                        detail=f"{len(sidecar.concepts)}c/{len(sidecar.rules)}r",
                     )
-                    run.save_sidecar(sidecar)
-                    total_in += in_toks
-                    total_out += out_toks
-                    extracted += 1
-                    emit(
-                        ItemDone(
-                            stage=_STAGE,
-                            item_id=chapter.chapter_id,
-                            status="ok",
-                            detail=f"{len(sidecar.concepts)}c/{len(sidecar.rules)}r",
-                        )
-                    )
+                )
 
-            await asyncio.gather(*(one(ch) for ch in to_extract), return_exceptions=False)
-
-        asyncio.run(run_all())
+        await asyncio.gather(*(one(ch) for ch in to_extract), return_exceptions=False)
         return total_in, total_out, extracted
 
 

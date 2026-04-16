@@ -82,7 +82,7 @@ class IngestResult(_Base):
 class IngestService:
     """Parse → (optional clean) → classify → save. No interactive output."""
 
-    def run(
+    async def run_async(
         self,
         params: IngestInput,
         *,
@@ -90,6 +90,10 @@ class IngestService:
         metadata_confirm: MetadataConfirmHook | None = None,
         cleanup_client: Any | None = None,
     ) -> IngestResult:
+        """Async implementation — safe to call from an existing event loop.
+
+        The sync ``run`` delegates here via ``asyncio.run``.
+        """
         emit = progress or (lambda _event: None)
         is_pdf = params.book_path.suffix.lower() == ".pdf"
 
@@ -115,7 +119,7 @@ class IngestService:
 
         cleanup_stats: CleanupStats | None = None
         if do_clean:
-            chapters, cleanup_stats = self._run_cleanup(
+            chapters, cleanup_stats = await self._run_cleanup_async(
                 chapters,
                 concurrency=params.clean_concurrency,
                 client=cleanup_client,
@@ -159,8 +163,26 @@ class IngestService:
             cleanup=cleanup_stats,
         )
 
+    def run(
+        self,
+        params: IngestInput,
+        *,
+        progress: ProgressCallback | None = None,
+        metadata_confirm: MetadataConfirmHook | None = None,
+        cleanup_client: Any | None = None,
+    ) -> IngestResult:
+        """Sync wrapper — calls ``run_async`` via ``asyncio.run``."""
+        return asyncio.run(
+            self.run_async(
+                params,
+                progress=progress,
+                metadata_confirm=metadata_confirm,
+                cleanup_client=cleanup_client,
+            )
+        )
+
     @staticmethod
-    def _run_cleanup(
+    async def _run_cleanup_async(
         chapters: list[NormalizedChapter],
         *,
         concurrency: int,
@@ -182,14 +204,12 @@ class IngestService:
                 )
             )
 
-        cleaned, total_in, total_out, failed_ids = asyncio.run(
-            clean_chapters_async(
-                chapters,
-                client=client,
-                concurrency=concurrency,
-                on_progress=on_progress,
-                on_failure=on_failure,
-            )
+        cleaned, total_in, total_out, failed_ids = await clean_chapters_async(
+            chapters,
+            client=client,
+            concurrency=concurrency,
+            on_progress=on_progress,
+            on_failure=on_failure,
         )
 
         stats = CleanupStats(
