@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -19,6 +20,7 @@ from franklin.checkpoint import (
     slugify,
     summarize_run,
 )
+from franklin.config import ConfigError, ModelConfig, load_model_config
 from franklin.errors import FriendlyError, format_friendly_error
 from franklin.estimate import RunEstimate, estimate_run
 from franklin.ingest import UnsupportedFormatError, ingest_book
@@ -26,9 +28,6 @@ from franklin.license import (
     LicenseError,
     ensure_license,
 )
-from franklin.mapper import DEFAULT_MODEL
-from franklin.planner import DEFAULT_MODEL as PLANNER_DEFAULT_MODEL
-from franklin.reducer import DEFAULT_MODEL as REDUCER_DEFAULT_MODEL
 from franklin.schema import (
     BookManifest,
 )
@@ -235,6 +234,18 @@ def _print_retry_hint(stage: str, run_root: Path) -> None:
         console.print()
 
 
+def _load_cli_model_config() -> ModelConfig:
+    try:
+        return load_model_config()
+    except ConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+
+def _explicit_model_override(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def _maybe_confirm_metadata(manifest: BookManifest, *, skip: bool) -> None:
     """Show detected metadata and ask the user to confirm or edit.
 
@@ -279,7 +290,9 @@ def _maybe_confirm_metadata(manifest: BookManifest, *, skip: bool) -> None:
     console.print(f"[green]✓[/green] updated to [cyan]{manifest.metadata.title}[/cyan]")
 
 
-def _print_run_estimate(book_path: Path, *, include_cleanup: bool) -> None:
+def _print_run_estimate(
+    book_path: Path, *, include_cleanup: bool, model_config: ModelConfig
+) -> None:
     """Parse the book locally and render a Rich table of predicted cost."""
     console.rule(f"[bold]franklin run --estimate[/bold] — {book_path.name}")
     console.print("  [dim]parsing book (no LLM calls, no disk writes)…[/dim]")
@@ -289,7 +302,12 @@ def _print_run_estimate(book_path: Path, *, include_cleanup: bool) -> None:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=2) from exc
 
-    result: RunEstimate = estimate_run(book, chapters, include_cleanup=include_cleanup)
+    result: RunEstimate = estimate_run(
+        book,
+        chapters,
+        include_cleanup=include_cleanup,
+        model_config=model_config,
+    )
 
     console.print()
     console.print(f"[bold]Book:[/bold]       [cyan]{result.book_title}[/cyan]")
@@ -550,6 +568,11 @@ def run_pipeline(
         "--clean",
         help="Run Tier 4 LLM cleanup during ingest (PDF only; also shown in --estimate totals)",
     ),
+    cleanup_model: str | None = typer.Option(
+        None,
+        "--cleanup-model",
+        help="Anthropic model ID for PDF cleanup (overrides franklin.yml)",
+    ),
     push: bool = typer.Option(
         False, "--push", help="After assemble, push the plugin to GitHub (requires --repo)"
     ),
@@ -584,11 +607,24 @@ def run_pipeline(
     )
 
     _validate_push_flags(push=push, repo=repo, branch=branch, create_pr=create_pr, public=public)
+    model_config = _load_cli_model_config()
+    cleanup_override = _explicit_model_override(cleanup_model)
+    selected_cleanup_model = cleanup_override or model_config.cleanup
 
     run = _resolve_run_dir(book_path, output)
 
     if estimate:
-        _print_run_estimate(book_path, include_cleanup=clean)
+        estimate_config = (
+            model_config
+            if cleanup_override is None
+            else ModelConfig(
+                map=model_config.map,
+                plan=model_config.plan,
+                reduce=model_config.reduce,
+                cleanup=selected_cleanup_model,
+            )
+        )
+        _print_run_estimate(book_path, include_cleanup=clean, model_config=estimate_config)
         return
 
     if run.root.exists() and not force:
@@ -640,6 +676,7 @@ def run_pipeline(
                 yes_i_know_pdfs=False,
                 clean=clean,
                 clean_concurrency=8,
+                cleanup_model=selected_cleanup_model,
                 yes=yes,
             ),
         ),
@@ -648,7 +685,7 @@ def run_pipeline(
             lambda: _do_map_stage(
                 run_dir=run.root,
                 chapter=None,
-                model=DEFAULT_MODEL,
+                model=model_config.map,
                 dry_run=False,
                 force=force,
                 concurrency=_DEFAULT_MAP_CONCURRENCY,
@@ -658,7 +695,7 @@ def run_pipeline(
             "plan",
             lambda: _do_plan_stage(
                 run_dir=run.root,
-                model=PLANNER_DEFAULT_MODEL,
+                model=model_config.plan,
                 dry_run=False,
                 force=force,
             ),
@@ -669,7 +706,7 @@ def run_pipeline(
                 run_dir=run.root,
                 artifact=None,
                 type_filter=None,
-                model=REDUCER_DEFAULT_MODEL,
+                model=model_config.reduce,
                 force=force,
                 concurrency=_DEFAULT_REDUCE_CONCURRENCY,
             ),

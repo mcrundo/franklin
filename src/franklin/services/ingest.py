@@ -22,6 +22,7 @@ from franklin.checkpoint import RunDirectory
 from franklin.classify import classify_chapters
 from franklin.ingest import ingest_book
 from franklin.ingest.cleanup import clean_chapters_async
+from franklin.llm.models import CLEANUP_MODEL
 from franklin.schema import BookManifest, NormalizedChapter
 from franklin.services.events import (
     InfoEvent,
@@ -34,10 +35,11 @@ from franklin.services.events import (
 
 _STAGE = "ingest"
 _CLEANUP_STAGE = "cleanup"
-_CLEANUP_MODEL = "claude-sonnet-4-6"
 
 
-def _sonnet_cost_usd(input_tokens: int, output_tokens: int) -> float:
+def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    if "opus" in model.lower():
+        return (input_tokens / 1_000_000) * 15.0 + (output_tokens / 1_000_000) * 75.0
     return (input_tokens / 1_000_000) * 3.0 + (output_tokens / 1_000_000) * 15.0
 
 
@@ -59,6 +61,7 @@ class IngestInput(_Base):
     run_dir: Path
     clean: bool = False
     clean_concurrency: int = Field(default=8, ge=1, le=32)
+    cleanup_model: str = CLEANUP_MODEL
 
 
 class CleanupStats(_Base):
@@ -122,12 +125,13 @@ class IngestService:
             chapters, cleanup_stats = await self._run_cleanup_async(
                 chapters,
                 concurrency=params.clean_concurrency,
+                model=params.cleanup_model,
                 client=cleanup_client,
                 emit=emit,
             )
             run.append_cost(
                 stage="cleanup",
-                model=_CLEANUP_MODEL,
+                model=params.cleanup_model,
                 input_tokens=cleanup_stats.input_tokens,
                 output_tokens=cleanup_stats.output_tokens,
                 cost_usd=cleanup_stats.cost_usd,
@@ -186,6 +190,7 @@ class IngestService:
         chapters: list[NormalizedChapter],
         *,
         concurrency: int,
+        model: str,
         client: Any | None,
         emit: ProgressCallback,
     ) -> tuple[list[NormalizedChapter], CleanupStats]:
@@ -207,6 +212,7 @@ class IngestService:
         cleaned, total_in, total_out, failed_ids = await clean_chapters_async(
             chapters,
             client=client,
+            model=model,
             concurrency=concurrency,
             on_progress=on_progress,
             on_failure=on_failure,
@@ -215,7 +221,7 @@ class IngestService:
         stats = CleanupStats(
             input_tokens=total_in,
             output_tokens=total_out,
-            cost_usd=_sonnet_cost_usd(total_in, total_out),
+            cost_usd=_cost_usd(model, total_in, total_out),
             failed_ids=failed_ids,
         )
 

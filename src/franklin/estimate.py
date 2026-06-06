@@ -15,17 +15,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from franklin.config import ModelConfig
 from franklin.schema import BookManifest, ChapterKind, NormalizedChapter
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens)
 # ---------------------------------------------------------------------------
 
-# Sonnet 4 pricing used by map, plan, and cleanup
+# Sonnet 4 pricing used by the Sonnet-family defaults
 _SONNET_INPUT_PER_M = 3.0
 _SONNET_OUTPUT_PER_M = 15.0
 
-# Opus 4 pricing used by reduce
+# Opus 4 pricing used by the Opus-family defaults
 _OPUS_INPUT_PER_M = 15.0
 _OPUS_OUTPUT_PER_M = 75.0
 
@@ -107,12 +108,20 @@ def _opus_cost(input_tokens: int, output_tokens: int) -> float:
     ) * _OPUS_OUTPUT_PER_M
 
 
+def _cost_for_model(model: str, input_tokens: int, output_tokens: int) -> float:
+    normalized = model.lower()
+    if "opus" in normalized:
+        return _opus_cost(input_tokens, output_tokens)
+    return _sonnet_cost(input_tokens, output_tokens)
+
+
 def estimate_run(
     book: BookManifest,
     chapters: list[NormalizedChapter],
     *,
     include_cleanup: bool = False,
     allowed_ids: set[str] | None = None,
+    model_config: ModelConfig | None = None,
 ) -> RunEstimate:
     """Predict token counts and cost for a full ``franklin run``.
 
@@ -125,6 +134,7 @@ def estimate_run(
     chapters they don't want mapped, so the re-displayed cost reflects
     what the run will actually spend.
     """
+    models = model_config or ModelConfig()
     toc_kind_by_id = {entry.id: entry.kind for entry in book.structure.toc}
     content_chapters = [
         c for c in chapters if toc_kind_by_id.get(c.chapter_id) == ChapterKind.CONTENT
@@ -156,8 +166,8 @@ def estimate_run(
             calls=len(content_chapters),
             input_tokens=map_input_total,
             output_tokens=map_output_total,
-            cost_usd=_sonnet_cost(map_input_total, map_output_total),
-            model="claude-sonnet-4-6",
+            cost_usd=_cost_for_model(models.map, map_input_total, map_output_total),
+            model=models.map,
         )
     )
 
@@ -168,8 +178,8 @@ def estimate_run(
             calls=1,
             input_tokens=_PLAN_INPUT,
             output_tokens=_PLAN_OUTPUT,
-            cost_usd=_sonnet_cost(_PLAN_INPUT, _PLAN_OUTPUT),
-            model="claude-sonnet-4-6",
+            cost_usd=_cost_for_model(models.plan, _PLAN_INPUT, _PLAN_OUTPUT),
+            model=models.plan,
         )
     )
 
@@ -186,8 +196,8 @@ def estimate_run(
             calls=estimated_artifacts,
             input_tokens=reduce_input,
             output_tokens=reduce_output,
-            cost_usd=_opus_cost(reduce_input, reduce_output),
-            model="claude-opus-4-6",
+            cost_usd=_cost_for_model(models.reduce, reduce_input, reduce_output),
+            model=models.reduce,
         )
     )
 
@@ -205,8 +215,8 @@ def estimate_run(
                 calls=len(content_chapters),
                 input_tokens=cleanup_input,
                 output_tokens=cleanup_output,
-                cost_usd=_sonnet_cost(cleanup_input, cleanup_output),
-                model="claude-sonnet-4-6",
+                cost_usd=_cost_for_model(models.cleanup, cleanup_input, cleanup_output),
+                model=models.cleanup,
             )
         )
 

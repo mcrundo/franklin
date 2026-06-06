@@ -210,7 +210,19 @@ runs/<slug>/
 
 - **Runs directory**: defaults to `./runs/` relative to cwd; override with `--output` on any stage command.
 - **License directory**: defaults to `~/.config/franklin/`; override with `FRANKLIN_LICENSE_DIR`.
-- **Models**: `claude-sonnet-4-6` is the default for `map`, `reduce`, and `cleanup`; `claude-opus-4-6` is the default for `plan`. Override per-command with `--model`.
+- **Models**: `claude-sonnet-4-6` is the default for `map`, `reduce`, and `cleanup`; `claude-opus-4-8` is the default for `plan`. Override `map`, `plan`, and `reduce` per-command with `--model`; override PDF cleanup with `--cleanup-model`.
+
+You can also put a simple `franklin.yml` or `franklin.yaml` in the directory where you run `franklin`:
+
+```yaml
+models:
+  map: claude-sonnet-4-6
+  plan: claude-opus-4-8
+  reduce: claude-sonnet-4-6
+  cleanup: claude-sonnet-4-6
+```
+
+Command-line model flags win over `franklin.yml`.
 
 ## Development
 
