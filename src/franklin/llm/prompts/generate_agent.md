@@ -95,6 +95,8 @@ Every relative markdown link in this file must point to a path that exists in th
 
 **Computing relative paths:** the file you're generating will live at the path shown in the "This specific agent" section below (typically `agents/X.md`). From there, linking to a reference means traversing up and then into skills: `../skills/<plugin>/references/patterns/X.md`. Linking to a command is `../commands/X.md`.
 
+Never use plugin-root-relative links inside agent files. Links like `commands/foo.md`, `references/core/foo.md`, or `skills/<plugin>/references/core/foo.md` are wrong from `agents/`; always include the required leading `../`.
+
 <!-- CACHE-BREAKPOINT -->
 
 ## This specific agent

@@ -314,6 +314,7 @@ def test_push_plugin_wraps_tree_in_single_plugin_marketplace(tmp_path: Path) -> 
     assert marketplace_path.exists()
     manifest = json.loads(marketplace_path.read_text())
     assert manifest["name"] == "my-plugin"
+    assert manifest["owner"] == {"name": "owner"}
     assert len(manifest["plugins"]) == 1
     assert manifest["plugins"][0]["name"] == "my-plugin"
     assert manifest["plugins"][0]["source"] == "./my-plugin"
@@ -321,6 +322,47 @@ def test_push_plugin_wraps_tree_in_single_plugin_marketplace(tmp_path: Path) -> 
     assert (workspace / "my-plugin" / ".claude-plugin" / "plugin.json").exists()
     assert (workspace / "my-plugin" / "SKILL.md").exists()
     assert (workspace / "README.md").exists()
+
+
+def test_push_plugin_rewrites_install_placeholder_in_source_and_workspace(
+    tmp_path: Path,
+) -> None:
+    plugin_root = _make_plugin_tree(tmp_path, name="my-plugin")
+    placeholder = (
+        "# my-plugin\n\n"
+        "```bash\n"
+        "claude plugin marketplace add owner/repo\n"
+        "claude plugin install my-plugin@my-plugin\n"
+        "```\n\n"
+        "*Replace `owner/repo` with the GitHub repository after publishing "
+        "with `franklin push`.*\n"
+    )
+    (plugin_root / "README.md").write_text(placeholder)
+
+    commands: list[list[str]] = []
+    with (
+        patch("franklin.publisher.shutil.which", return_value="/usr/local/bin/gh"),
+        patch(
+            "franklin.publisher.subprocess.run",
+            side_effect=_make_fake_run(commands, repo_exists=True),
+        ),
+    ):
+        push_plugin(
+            plugin_root,
+            repo="owner/my-plugin",
+            commit_message="franklin: assemble my-plugin v0.1.0",
+        )
+
+    workspace = plugin_root.parent / "_publish_my-plugin"
+    for readme in (
+        plugin_root / "README.md",
+        workspace / "README.md",
+        workspace / "my-plugin/README.md",
+    ):
+        text = readme.read_text()
+        assert "owner/repo" not in text
+        assert "claude plugin marketplace add owner/my-plugin" in text
+        assert "Replace `owner/repo`" not in text
 
 
 def test_push_plugin_requires_plugin_manifest(tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ from franklin.assembler import (
 from franklin.checkpoint import RunDirectory
 from franklin.cli import _maybe_confirm_metadata, _resolve_run_dir, app
 from franklin.cli import console as console
+from franklin.config import ConfigError, StageName, resolve_model
 from franklin.grading import RunGrade
 from franklin.ingest import UnsupportedFormatError
 from franklin.mapper import DEFAULT_MODEL, build_user_prompt
@@ -84,6 +85,15 @@ from franklin.services import (
 
 _DEFAULT_MAP_CONCURRENCY = 8
 _DEFAULT_REDUCE_CONCURRENCY = 3
+
+
+def _configured_model(stage: StageName, override: object | None) -> str:
+    try:
+        model_override = override if isinstance(override, str) and override else None
+        return resolve_model(stage, model_override)
+    except ConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +315,11 @@ def ingest(
         min=1,
         max=32,
     ),
+    cleanup_model: str | None = typer.Option(
+        None,
+        "--cleanup-model",
+        help="Anthropic model ID for PDF cleanup (overrides franklin.yml)",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -319,6 +334,7 @@ def ingest(
         yes_i_know_pdfs=yes_i_know_pdfs,
         clean=clean,
         clean_concurrency=clean_concurrency,
+        cleanup_model=cleanup_model,
         yes=yes,
     )
 
@@ -331,6 +347,7 @@ def _do_ingest_stage(
     clean: bool,
     clean_concurrency: int,
     yes: bool,
+    cleanup_model: str | None = None,
 ) -> None:
     """Shared ingest implementation used by the ``ingest`` command and ``run_pipeline``."""
     run_dir = _resolve_run_dir(book_path, output).root
@@ -346,6 +363,7 @@ def _do_ingest_stage(
             "[dim]--clean is a no-op on EPUBs (they're already structurally clean)[/dim]"
         )
 
+    resolved_cleanup_model = _configured_model("cleanup", cleanup_model)
     console.print(f"[bold]Ingesting[/bold] {book_path}")
 
     def confirm(manifest: BookManifest) -> BookManifest:
@@ -360,6 +378,7 @@ def _do_ingest_stage(
                 run_dir=run_dir,
                 clean=clean,
                 clean_concurrency=clean_concurrency,
+                cleanup_model=resolved_cleanup_model,
             ),
             progress=renderer.emit,
             metadata_confirm=confirm,
@@ -450,7 +469,9 @@ def map_chapters(
     chapter: str | None = typer.Option(
         None, "--chapter", "-c", help="Extract just this chapter_id (e.g. ch06)"
     ),
-    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Anthropic model ID"),
+    model: str | None = typer.Option(
+        None, "--model", help=f"Anthropic model ID (default: {DEFAULT_MODEL} or franklin.yml)"
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Build and print the prompt without calling the API"
     ),
@@ -480,17 +501,18 @@ def _do_map_stage(
     *,
     run_dir: Path,
     chapter: str | None,
-    model: str,
+    model: str | None,
     dry_run: bool,
     force: bool,
     concurrency: int,
 ) -> None:
     """Shared map implementation used by the ``map`` command and ``run_pipeline``."""
+    resolved_model = _configured_model("map", model)
     service = MapService()
     params = MapInput(
         run_dir=run_dir,
         chapter_id=chapter,
-        model=model,
+        model=resolved_model,
         force=force,
         concurrency=concurrency,
     )
@@ -545,8 +567,13 @@ def plan_pipeline(
     run_dir: Path = typer.Argument(
         ..., exists=True, file_okay=False, help="Run directory with sidecars"
     ),
-    model: str = typer.Option(
-        PLANNER_DEFAULT_MODEL, "--model", help="Anthropic model ID for the planner"
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help=(
+            f"Anthropic model ID for the planner "
+            f"(default: {PLANNER_DEFAULT_MODEL} or franklin.yml)"
+        ),
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Build and print the plan prompt without calling the API"
@@ -562,13 +589,14 @@ def plan_pipeline(
 def _do_plan_stage(
     *,
     run_dir: Path,
-    model: str,
+    model: str | None,
     dry_run: bool,
     force: bool,
 ) -> None:
     """Shared plan implementation used by the ``plan`` command and ``run_pipeline``."""
+    resolved_model = _configured_model("plan", model)
     service = PlanService()
-    params = PlanInput(run_dir=run_dir, model=model, force=force)
+    params = PlanInput(run_dir=run_dir, model=resolved_model, force=force)
 
     try:
         context = service.prepare(params)
@@ -603,7 +631,7 @@ def _do_plan_stage(
 
     console.print(
         f"[bold]Designing plugin[/bold] for [cyan]{context.manifest.metadata.title}[/cyan] "
-        f"from {len(context.sidecars)} sidecars using [dim]{model}[/dim]"
+        f"from {len(context.sidecars)} sidecars using [dim]{resolved_model}[/dim]"
     )
     from rich.live import Live
     from rich.spinner import Spinner
@@ -701,8 +729,12 @@ def reduce_pipeline(
         "-t",
         help="Generate only artifacts of this type (skill, reference, command, agent)",
     ),
-    model: str = typer.Option(
-        REDUCER_DEFAULT_MODEL, "--model", help="Anthropic model ID for generation"
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help=(
+            f"Anthropic model ID for generation (default: {REDUCER_DEFAULT_MODEL} or franklin.yml)"
+        ),
     ),
     force: bool = typer.Option(
         False, "--force", help="Regenerate artifacts whose output file already exists"
@@ -731,17 +763,18 @@ def _do_reduce_stage(
     run_dir: Path,
     artifact: str | None,
     type_filter: str | None,
-    model: str,
+    model: str | None,
     force: bool,
     concurrency: int,
 ) -> None:
     """Shared reduce implementation used by the ``reduce`` command and ``run_pipeline``."""
+    resolved_model = _configured_model("reduce", model)
     service = ReduceService()
     params = ReduceInput(
         run_dir=run_dir,
         artifact_id=artifact,
         type_filter=type_filter,
-        model=model,
+        model=resolved_model,
         force=force,
         concurrency=concurrency,
     )
@@ -786,7 +819,7 @@ def _do_reduce_stage(
         service,
         context=context,
         targets=targets,
-        model=model,
+        model=resolved_model,
         force=force,
         concurrency=concurrency,
     )

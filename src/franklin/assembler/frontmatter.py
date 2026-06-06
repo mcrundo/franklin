@@ -23,6 +23,9 @@ from typing import Any
 import yaml
 
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+_DESCRIPTION_BLOCK_RE = re.compile(
+    r"(?ms)^description:\s*[>|][^\n]*\n(?P<body>(?:[ \t]+.*(?:\n|$)|\s*\n)+)"
+)
 
 # Required string fields per file category. Lists of required fields only —
 # optional fields like allowed-tools, argument-hint, model are not enforced
@@ -62,6 +65,28 @@ def validate_frontmatter(plugin_root: Path) -> list[FrontmatterIssue]:
             issues.extend(_validate_file(agent_md, "agent"))
 
     return issues
+
+
+def normalize_frontmatter_descriptions(plugin_root: Path) -> None:
+    """Collapse generated folded/literal description scalars to one line.
+
+    Claude Code plugin discovery is more reliable with a single-line
+    description scalar. LLMs occasionally emit valid YAML block scalars
+    (`description: >`), so normalize them deterministically before
+    validation and packaging.
+    """
+    for skill_md in sorted(plugin_root.glob("skills/*/SKILL.md")):
+        _normalize_file(skill_md)
+
+    commands_dir = plugin_root / "commands"
+    if commands_dir.is_dir():
+        for cmd_md in sorted(commands_dir.glob("*.md")):
+            _normalize_file(cmd_md)
+
+    agents_dir = plugin_root / "agents"
+    if agents_dir.is_dir():
+        for agent_md in sorted(agents_dir.glob("*.md")):
+            _normalize_file(agent_md)
 
 
 def _validate_file(path: Path, category: str) -> list[FrontmatterIssue]:
@@ -132,6 +157,34 @@ def _validate_file(path: Path, category: str) -> list[FrontmatterIssue]:
             )
 
     return issues
+
+
+def _normalize_file(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    match = _FRONTMATTER_RE.match(text)
+    if not match or not _DESCRIPTION_BLOCK_RE.search(match.group(1)):
+        return
+    try:
+        data: Any = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return
+    if not isinstance(data, dict) or not isinstance(data.get("description"), str):
+        return
+
+    description = " ".join(data["description"].split())
+    replacement = f"description: {_yaml_string(description)}\n"
+    frontmatter = _DESCRIPTION_BLOCK_RE.sub(replacement, match.group(1), count=1)
+    path.write_text(f"---\n{frontmatter}---\n{text[match.end() :]}", encoding="utf-8")
+
+
+def _yaml_string(value: str) -> str:
+    return json_escape(value)
+
+
+def json_escape(value: str) -> str:
+    import json
+
+    return json.dumps(value)
 
 
 _SIMPLE_KV_RE = re.compile(r"^([a-z][a-z_-]*)\s*:\s*(.+)$", re.IGNORECASE)

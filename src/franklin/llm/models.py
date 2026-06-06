@@ -22,7 +22,7 @@ Keep these aligned with the model IDs Anthropic publishes in the
 from __future__ import annotations
 
 MAP_MODEL = "claude-sonnet-4-6"
-PLAN_MODEL = "claude-opus-4-6"
+PLAN_MODEL = "claude-opus-4-8"
 REDUCE_MODEL = "claude-sonnet-4-6"
 CLEANUP_MODEL = "claude-sonnet-4-6"
 

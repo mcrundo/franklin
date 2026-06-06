@@ -9,12 +9,15 @@ is deterministic assembly from the plan + book metadata.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from franklin.schema import ArtifactType, BookManifest, PlanManifest
 
 
-def _first_sentence(text: str) -> str:
-    """Extract the first sentence from a brief, for table display."""
+def _brief_summary(text: str) -> str:
+    """Extract a short summary from a brief when no generated file exists."""
     # Split on ". " or ":" to get just the opening clause.
     for sep in (". ", ": "):
         if sep in text:
@@ -83,7 +86,8 @@ def generate_readme(
         lines.append("|---------|---------|")
         for cmd in commands:
             cmd_name = Path(cmd.path).stem
-            lines.append(f"| `/{plugin.name}:{cmd_name}` | {_first_sentence(cmd.brief)} |")
+            description = _command_description(plugin_root, cmd.path) or _brief_summary(cmd.brief)
+            lines.append(f"| `/{plugin.name}:{cmd_name}` | {description} |")
         lines.append("")
 
     # ---- agents -----------------------------------------------------------
@@ -94,7 +98,7 @@ def generate_readme(
         lines.append("")
         for agent in agents:
             agent_name = Path(agent.path).stem
-            lines.append(f"- **{agent_name}** — {_first_sentence(agent.brief)}")
+            lines.append(f"- **{agent_name}** — {_brief_summary(agent.brief)}")
         lines.append("")
 
     # ---- reference files --------------------------------------------------
@@ -136,3 +140,24 @@ def generate_readme(
     readme_path = plugin_root / "README.md"
     readme_path.write_text("\n".join(lines))
     return readme_path
+
+
+def _command_description(plugin_root: Path, command_path: str) -> str | None:
+    """Read the generated command frontmatter description for README tables."""
+    path = plugin_root / command_path
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return None
+    _, raw_frontmatter, _body = text.split("---", maxsplit=2)
+    try:
+        data: Any = yaml.safe_load(raw_frontmatter)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    description = data.get("description")
+    if not isinstance(description, str):
+        return None
+    return " ".join(description.split()) or None

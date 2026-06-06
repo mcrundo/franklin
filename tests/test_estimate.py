@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from franklin.config import ModelConfig
 from franklin.estimate import estimate_run
 from franklin.schema import (
     BookManifest,
@@ -122,3 +123,25 @@ def test_estimate_exposes_cost_range() -> None:
     result = estimate_run(book, chapters)
     assert result.total_cost_low_usd < result.total_cost_usd
     assert result.total_cost_low_usd > 0
+
+
+def test_estimate_uses_configured_stage_models() -> None:
+    book, chapters = _book(n_content=4)
+    result = estimate_run(
+        book,
+        chapters,
+        include_cleanup=True,
+        model_config=ModelConfig(
+            map="custom-map",
+            plan="custom-plan",
+            reduce="custom-reduce",
+            cleanup="custom-cleanup",
+        ),
+    )
+
+    assert {stage.stage: stage.model for stage in result.stages} == {
+        "map": "custom-map",
+        "plan": "custom-plan",
+        "reduce": "custom-reduce",
+        "cleanup": "custom-cleanup",
+    }

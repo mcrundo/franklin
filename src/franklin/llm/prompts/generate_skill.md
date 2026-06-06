@@ -20,7 +20,7 @@ allowed-tools:
 ---
 ```
 
-The `description` should clearly say when Claude should use this skill — it's what the tool selector matches against. Include trigger phrases in natural language (e.g. "use when reviewing Rails code for layered architecture violations").
+The `description` should clearly say when Claude should use this skill — it's what the tool selector matches against. Include trigger phrases in natural language (e.g. "use when reviewing Rails code for layered architecture violations"). It MUST be a single-line quoted scalar, never a folded (`>`) or literal (`|`) YAML block.
 
 ### Body structure
 
@@ -54,6 +54,7 @@ Target length: the brief will include an estimated token count (typically 2500�
 5. **Match the book's voice** per the coherence rules above.
 6. **Frontmatter is required.** Emit the YAML block at the top.
 7. **No placeholders in output.** Your generated SKILL.md must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens. Fill every value in with a real literal — the plugin name, real file paths, real command names — never with angle-bracket descriptions.
+8. **Complete routing tables.** If you include a pattern, topic, anti-pattern, or reference catalog table, include every planned reference that belongs to that table's category. Do not omit a reference that appears later in the Reference map.
 
 ## Full plugin file tree
 

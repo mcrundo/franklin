@@ -19,7 +19,7 @@ from typing import Any
 import typer
 from rich.table import Table
 
-from franklin.cli import _print_estimate_callout, _resolve_run_dir, app
+from franklin.cli import _load_cli_model_config, _print_estimate_callout, _resolve_run_dir, app
 from franklin.cli import console as console
 from franklin.commands.stages import ingest
 from franklin.estimate import estimate_run
@@ -239,7 +239,12 @@ def _render_gate_estimate(
     selected_ids: set[str],
 ) -> None:
     """Render the pre-map cost table, narrowed to ``selected_ids``."""
-    result = estimate_run(manifest, chapters, allowed_ids=selected_ids)
+    result = estimate_run(
+        manifest,
+        chapters,
+        allowed_ids=selected_ids,
+        model_config=_load_cli_model_config(),
+    )
     total_content = sum(
         1
         for e in manifest.structure.toc

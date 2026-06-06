@@ -22,7 +22,9 @@ from franklin.assembler import (
     TemplateLeak,
     find_template_leaks,
     generate_readme,
+    normalize_frontmatter_descriptions,
     package_plugin,
+    repair_common_agent_links,
     validate_frontmatter,
     validate_links,
     write_plugin_manifest,
@@ -98,6 +100,8 @@ class AssembleService:
 
         emit(StageStart(stage=_STAGE))
 
+        repair_common_agent_links(plugin_root)
+        normalize_frontmatter_descriptions(plugin_root)
         manifest_path = write_plugin_manifest(plugin_root, plan.plugin)
         book = run.load_book()
         readme_path = generate_readme(plugin_root, plan=plan, book=book)

@@ -339,6 +339,47 @@ def test_run_without_push_does_not_invoke_push(
     assert not stage_mocks["push"].called
 
 
+def test_run_uses_models_from_root_config(
+    book_epub: Path,
+    tmp_path: Path,
+    stage_mocks: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "franklin.yml").write_text(
+        """
+models:
+  map: configured-map
+  plan: configured-plan
+  reduce: configured-reduce
+  cleanup: configured-cleanup
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with _patch_stages(stage_mocks):
+        run_pipeline(
+            book_path=book_epub,
+            output=tmp_path / "run-output",
+            force=False,
+            yes=False,
+            estimate=False,
+            review=False,
+            clean=True,
+            push=False,
+            repo=None,
+            branch="main",
+            create_pr=False,
+            public=False,
+            publish=False,
+        )
+
+    assert stage_mocks["ingest"].call_args.kwargs["cleanup_model"] == "configured-cleanup"
+    assert stage_mocks["map"].call_args.kwargs["model"] == "configured-map"
+    assert stage_mocks["plan"].call_args.kwargs["model"] == "configured-plan"
+    assert stage_mocks["reduce"].call_args.kwargs["model"] == "configured-reduce"
+
+
 def test_run_with_push_propagates_branch_and_pr_and_public(
     book_epub: Path,
     tmp_path: Path,

@@ -86,7 +86,8 @@ def push_plugin(
 
     backend = _detect_backend()
 
-    workspace = _build_marketplace_workspace(plugin_root)
+    update_readme_install_section(plugin_root / "README.md", repo)
+    workspace = _build_marketplace_workspace(plugin_root, repo=repo, owner=owner)
 
     created_repo = False
     if not _repo_exists(owner, name, backend):
@@ -116,7 +117,7 @@ def push_plugin(
 # ---------------------------------------------------------------------------
 
 
-def _build_marketplace_workspace(plugin_root: Path) -> Path:
+def _build_marketplace_workspace(plugin_root: Path, *, repo: str, owner: str) -> Path:
     """Assemble a single-plugin marketplace tree next to ``plugin_root``.
 
     Copies the plugin into ``<parent>/_publish_<name>/<name>/`` and writes
@@ -135,8 +136,10 @@ def _build_marketplace_workspace(plugin_root: Path) -> Path:
         shutil.rmtree(plugin_dest)
     shutil.copytree(plugin_root, plugin_dest, ignore=shutil.ignore_patterns(".git"))
 
-    _write_marketplace_manifest(workspace, manifest)
+    update_readme_install_section(plugin_dest / "README.md", repo)
+    _write_marketplace_manifest(workspace, manifest, owner=owner)
     _mirror_top_level_readme(workspace, plugin_dest)
+    update_readme_install_section(workspace / "README.md", repo)
 
     return workspace
 
@@ -159,7 +162,9 @@ def _load_plugin_manifest(plugin_root: Path) -> dict[str, Any]:
     return data
 
 
-def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]) -> Path:
+def _write_marketplace_manifest(
+    workspace: Path, plugin_manifest: dict[str, Any], *, owner: str
+) -> Path:
     plugin_name = str(plugin_manifest["name"])
     entry: dict[str, Any] = {"name": plugin_name, "source": f"./{plugin_name}"}
     for field in ("version", "description", "homepage"):
@@ -177,7 +182,7 @@ def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]
 
     manifest = {
         "name": plugin_name,
-        "owner": author if isinstance(author, dict) else {"name": "franklin"},
+        "owner": {"name": owner},
         "metadata": {
             "description": plugin_manifest.get("description", f"{plugin_name} plugin"),
         },
@@ -189,6 +194,26 @@ def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]
     manifest_path = manifest_dir / "marketplace.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest_path
+
+
+def update_readme_install_section(readme_path: Path, repo: str) -> bool:
+    """Replace the pre-publish install placeholder with the real GitHub repo."""
+    if not readme_path.exists():
+        return False
+    readme_text = readme_path.read_text(encoding="utf-8")
+    updated = readme_text.replace(
+        "claude plugin marketplace add owner/repo",
+        f"claude plugin marketplace add {repo}",
+    )
+    updated = updated.replace(
+        "\n*Replace `owner/repo` with the GitHub repository "
+        "after publishing with `franklin push`.*\n",
+        "\n",
+    )
+    if updated == readme_text:
+        return False
+    readme_path.write_text(updated, encoding="utf-8")
+    return True
 
 
 def _mirror_top_level_readme(workspace: Path, plugin_dest: Path) -> None:
