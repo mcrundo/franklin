@@ -17,6 +17,8 @@ argument-hint: <optional usage hint shown in the command palette, e.g. "[class-n
 
 Keep the description under 80 characters — it's what appears in the command palette when the user types `/`. Start with an action verb, no "Slash command to" prefix. Example: `"Extract business logic into a service class"`.
 
+If the command body supports named modes, object types, routes, or categories, the `argument-hint` must enumerate every supported value. Do not list a subset in frontmatter while documenting more options in the body.
+
 ### Body structure
 
 The body is the instructions Claude follows when the user invokes the command. Use this template:
@@ -47,6 +49,7 @@ Target length: the brief will include an estimated token count (typically 1000�
 5. **Link to reference files** for deeper pattern explanations. See the plugin file tree below for the only valid link targets.
 6. **Frontmatter is required.**
 7. **No placeholders in output.** Your generated command file must contain zero `{{name}}` Franklin-template tokens and zero angle-bracket placeholder tokens (`<command name>`, `<relative path to reference>`, etc). Fill every value with a real literal. Never emit a link whose target is a description like `<relative path to X>` — write out the actual path from the file tree, or omit the link entirely.
+8. **Keep frontmatter and body synchronized.** The README uses the frontmatter `description`, and Claude Code displays `argument-hint`; both must be complete, not abbreviated drafts.
 
 ## Full plugin file tree
 

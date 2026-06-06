@@ -6,8 +6,12 @@ Pure Python — no LLM calls. Fast enough to run repeatedly while iterating
 on any earlier stage.
 """
 
-from franklin.assembler.frontmatter import FrontmatterIssue, validate_frontmatter
-from franklin.assembler.links import BrokenLink, validate_links
+from franklin.assembler.frontmatter import (
+    FrontmatterIssue,
+    normalize_frontmatter_descriptions,
+    validate_frontmatter,
+)
+from franklin.assembler.links import BrokenLink, repair_common_agent_links, validate_links
 from franklin.assembler.manifest import write_plugin_manifest
 from franklin.assembler.packager import package_plugin
 from franklin.assembler.readme import generate_readme
@@ -19,7 +23,9 @@ __all__ = [
     "TemplateLeak",
     "find_template_leaks",
     "generate_readme",
+    "normalize_frontmatter_descriptions",
     "package_plugin",
+    "repair_common_agent_links",
     "validate_frontmatter",
     "validate_links",
     "write_plugin_manifest",

@@ -4,16 +4,31 @@ from __future__ import annotations
 
 import json
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from franklin.assembler import (
     find_template_leaks,
+    generate_readme,
+    normalize_frontmatter_descriptions,
     package_plugin,
+    repair_common_agent_links,
     validate_frontmatter,
     validate_links,
     write_plugin_manifest,
 )
-from franklin.schema import PluginMeta
+from franklin.schema import (
+    Artifact,
+    ArtifactType,
+    BookManifest,
+    BookMetadata,
+    BookSource,
+    BookStructure,
+    PlanManifest,
+    PluginMeta,
+)
 
 
 def test_write_plugin_manifest_creates_claude_plugin_directory(tmp_path: Path) -> None:
@@ -47,6 +62,27 @@ def test_write_plugin_manifest_contains_expected_fields(tmp_path: Path) -> None:
     assert data["description"] == "Layered design for Rails apps"
     assert data["keywords"] == ["rails", "architecture", "patterns"]
     assert data["license"] == "MIT"
+    assert data["author"]["name"]
+
+
+def test_write_plugin_manifest_uses_default_author_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import franklin.assembler.manifest as manifest_module
+
+    monkeypatch.setattr(
+        manifest_module,
+        "_default_author",
+        lambda: {"name": "dchuk", "email": "me@dchuk.com"},
+    )
+    plugin_root = tmp_path / "x"
+    manifest_path = write_plugin_manifest(
+        plugin_root,
+        PluginMeta(name="x", version="0.1.0", description="d"),
+    )
+
+    data = json.loads(manifest_path.read_text())
+    assert data["author"] == {"name": "dchuk", "email": "me@dchuk.com"}
 
 
 def test_write_plugin_manifest_omits_empty_keywords(tmp_path: Path) -> None:
@@ -170,6 +206,24 @@ def test_validate_links_flags_double_brace_placeholders(tmp_path: Path) -> None:
     broken = validate_links(root)
     assert len(broken) == 1
     assert broken[0].kind == "placeholder"
+
+
+def test_repair_common_agent_links_rewrites_plugin_root_relative_links(tmp_path: Path) -> None:
+    root = _mkplugin(tmp_path)
+    (root / "agents/reviewer.md").write_text(
+        "# Reviewer\n"
+        "[command](commands/spec-test.md)\n"
+        "[reference](references/patterns/service-objects.md)\n"
+        "[skill reference](skills/p/references/core/layered-architecture.md)\n"
+    )
+
+    repair_common_agent_links(root)
+
+    text = (root / "agents/reviewer.md").read_text()
+    assert "[command](../commands/spec-test.md)" in text
+    assert "[reference](../skills/p/references/patterns/service-objects.md)" in text
+    assert "[skill reference](../skills/p/references/core/layered-architecture.md)" in text
+    assert validate_links(root) == []
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +362,76 @@ def test_validate_frontmatter_ignores_reference_files(tmp_path: Path) -> None:
     root = _write_valid_plugin(tmp_path)
     # Reference files already exist from _mkplugin; confirm they're not flagged
     assert validate_frontmatter(root) == []
+
+
+def test_normalize_frontmatter_descriptions_collapses_folded_blocks(tmp_path: Path) -> None:
+    root = _write_valid_plugin(tmp_path)
+    (root / "skills/p/SKILL.md").write_text(
+        "---\n"
+        "name: p\n"
+        "description: >\n"
+        "  Use when reviewing Rails code\n"
+        "  for layered architecture violations.\n"
+        "allowed-tools:\n"
+        "  - Read\n"
+        "---\n\n"
+        "# Body\n"
+    )
+
+    normalize_frontmatter_descriptions(root)
+
+    text = (root / "skills/p/SKILL.md").read_text()
+    assert "description: >" not in text
+    assert (
+        'description: "Use when reviewing Rails code for layered architecture violations."' in text
+    )
+    assert validate_frontmatter(root) == []
+
+
+def test_generate_readme_uses_full_command_frontmatter_description(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugin"
+    (plugin_root / "commands").mkdir(parents=True)
+    (plugin_root / "commands" / "review-pipeline.md").write_text(
+        "---\n"
+        "description: Run a Gap Selling pipeline review on a deal and flag data gaps\n"
+        "---\n\n"
+        "# Review Pipeline\n"
+    )
+    plan = PlanManifest(
+        book_id="gap-selling",
+        generated_at=datetime.now(UTC),
+        planner_model="test",
+        planner_rationale="test",
+        plugin=PluginMeta(name="gap-selling", version="0.1.0", description="Test"),
+        artifacts=[
+            Artifact(
+                id="art.command.review-pipeline",
+                type=ArtifactType.COMMAND,
+                path="commands/review-pipeline.md",
+                brief=(
+                    "Run a Gap Selling pipeline review on a deal and flag data gaps: "
+                    "includes more detail that should not be truncated."
+                ),
+            )
+        ],
+    )
+    book = BookManifest(
+        franklin_version="0.1.0",
+        source=BookSource(
+            path="book.epub",
+            sha256="0" * 64,
+            format="epub",
+            ingested_at=datetime.now(UTC),
+        ),
+        metadata=BookMetadata(title="Gap Selling", authors=["Keenan"]),
+        structure=BookStructure(),
+    )
+
+    readme = generate_readme(plugin_root, plan=plan, book=book)
+
+    text = readme.read_text()
+    assert "Run a Gap Selling pipeline review on a deal and flag data gaps" in text
+    assert "..." not in text
 
 
 # ---------------------------------------------------------------------------

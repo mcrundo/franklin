@@ -8,8 +8,10 @@ __pycache__/
 dist/
 build/
 runs/
+books/
 .DS_Store
 .claude/
+.env
 
 # Never commit source books — they are copyrighted material
 *.epub
