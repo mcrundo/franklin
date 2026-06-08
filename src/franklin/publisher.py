@@ -59,6 +59,50 @@ class PushResult:
     backend: str
 
 
+@dataclass(frozen=True)
+class PublisherIdentity:
+    """The single resolved publishing identity, threaded to every sink.
+
+    ``owner``/``repo_name`` drive the GitHub remote, the README install
+    command, and the marketplace owner; ``author`` populates both the
+    plugin manifest and the marketplace owner. Resolving this once and
+    threading it everywhere keeps the README, ``plugin.json`` ``author``,
+    ``marketplace.json`` ``owner``, and the git remote consistent.
+    """
+
+    owner: str
+    repo_name: str
+    author_name: str | None = None
+    author_email: str | None = None
+
+    @property
+    def repo(self) -> str:
+        return f"{self.owner}/{self.repo_name}"
+
+    @property
+    def author(self) -> dict[str, str]:
+        author: dict[str, str] = {"name": self.author_name or self.owner}
+        if self.author_email:
+            author["email"] = self.author_email
+        return author
+
+    @classmethod
+    def from_repo(
+        cls,
+        repo: str,
+        *,
+        author_name: str | None = None,
+        author_email: str | None = None,
+    ) -> PublisherIdentity:
+        owner, name = _parse_repo(repo)
+        return cls(
+            owner=owner,
+            repo_name=name,
+            author_name=author_name,
+            author_email=author_email,
+        )
+
+
 def push_plugin(
     plugin_root: Path,
     *,
@@ -67,6 +111,8 @@ def push_plugin(
     create_pr: bool = False,
     public: bool = False,
     commit_message: str,
+    author_name: str | None = None,
+    author_email: str | None = None,
 ) -> PushResult:
     """Push ``plugin_root`` to ``github.com/<repo>`` as a single-plugin marketplace.
 
@@ -78,7 +124,10 @@ def push_plugin(
     true and ``branch`` is not ``main``, also opens a pull request
     against ``main``.
     """
-    owner, name = _parse_repo(repo)
+    identity = PublisherIdentity.from_repo(
+        repo, author_name=author_name, author_email=author_email
+    )
+    owner, name = identity.owner, identity.repo_name
     if create_pr and branch == "main":
         raise PushError("--pr requires --branch (cannot open a PR against main from main)")
     if not plugin_root.is_dir():
@@ -86,7 +135,12 @@ def push_plugin(
 
     backend = _detect_backend()
 
-    workspace = _build_marketplace_workspace(plugin_root)
+    # Resolve the real identity into the source tree (README install command +
+    # plugin.json author) before wrapping it, so every published copy inherits
+    # the substitution instead of shipping the `owner/repo` placeholder.
+    _apply_identity_to_source(plugin_root, identity)
+
+    workspace = _build_marketplace_workspace(plugin_root, identity)
 
     created_repo = False
     if not _repo_exists(owner, name, backend):
@@ -116,7 +170,60 @@ def push_plugin(
 # ---------------------------------------------------------------------------
 
 
-def _build_marketplace_workspace(plugin_root: Path) -> Path:
+def _apply_identity_to_source(plugin_root: Path, identity: PublisherIdentity) -> None:
+    """Substitute the resolved identity into the source plugin tree.
+
+    Rewrites the README install command from the ``owner/repo`` placeholder
+    to the real repository (and drops the "Replace …" hint), and ensures
+    ``plugin.json`` carries an ``author``. Both edits happen before the
+    marketplace workspace is copied, so the nested and top-level bundle
+    copies inherit them automatically.
+    """
+    _substitute_readme_install(plugin_root / "README.md", identity)
+    _inject_manifest_author(plugin_root / ".claude-plugin" / "plugin.json", identity)
+
+
+def _substitute_readme_install(readme_path: Path, identity: PublisherIdentity) -> None:
+    if not readme_path.exists():
+        return
+    text = readme_path.read_text(encoding="utf-8")
+    updated = text.replace(
+        "claude plugin marketplace add owner/repo",
+        f"claude plugin marketplace add {identity.repo}",
+    )
+    updated = updated.replace(
+        "\n*Replace `owner/repo` with the GitHub repository "
+        "after publishing with `franklin push`.*\n",
+        "\n",
+    )
+    if updated != text:
+        readme_path.write_text(updated)
+
+
+def _inject_manifest_author(manifest_path: Path, identity: PublisherIdentity) -> None:
+    if not manifest_path.exists():
+        return
+    try:
+        data: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    if not isinstance(data, dict):
+        return
+    existing = data.get("author")
+    if isinstance(existing, dict) and existing.get("name"):
+        return
+    # Re-emit with author placed after description, matching assemble's key order.
+    ordered: dict[str, Any] = {}
+    for key, value in data.items():
+        ordered[key] = value
+        if key == "description":
+            ordered["author"] = identity.author
+    if "author" not in ordered:
+        ordered["author"] = identity.author
+    manifest_path.write_text(json.dumps(ordered, indent=2) + "\n")
+
+
+def _build_marketplace_workspace(plugin_root: Path, identity: PublisherIdentity) -> Path:
     """Assemble a single-plugin marketplace tree next to ``plugin_root``.
 
     Copies the plugin into ``<parent>/_publish_<name>/<name>/`` and writes
@@ -135,7 +242,7 @@ def _build_marketplace_workspace(plugin_root: Path) -> Path:
         shutil.rmtree(plugin_dest)
     shutil.copytree(plugin_root, plugin_dest, ignore=shutil.ignore_patterns(".git"))
 
-    _write_marketplace_manifest(workspace, manifest)
+    _write_marketplace_manifest(workspace, manifest, identity)
     _mirror_top_level_readme(workspace, plugin_dest)
 
     return workspace
@@ -159,7 +266,11 @@ def _load_plugin_manifest(plugin_root: Path) -> dict[str, Any]:
     return data
 
 
-def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]) -> Path:
+def _write_marketplace_manifest(
+    workspace: Path,
+    plugin_manifest: dict[str, Any],
+    identity: PublisherIdentity,
+) -> Path:
     plugin_name = str(plugin_manifest["name"])
     entry: dict[str, Any] = {"name": plugin_name, "source": f"./{plugin_name}"}
     for field in ("version", "description", "homepage"):
@@ -167,8 +278,9 @@ def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]
         if isinstance(value, str) and value.strip():
             entry[field] = value
     author = plugin_manifest.get("author")
-    if isinstance(author, dict):
-        entry["author"] = author
+    entry["author"] = (
+        author if isinstance(author, dict) and author.get("name") else identity.author
+    )
     keywords = plugin_manifest.get("keywords")
     if isinstance(keywords, list):
         tags = [k for k in keywords if isinstance(k, str)]
@@ -177,7 +289,7 @@ def _write_marketplace_manifest(workspace: Path, plugin_manifest: dict[str, Any]
 
     manifest = {
         "name": plugin_name,
-        "owner": author if isinstance(author, dict) else {"name": "franklin"},
+        "owner": identity.author,
         "metadata": {
             "description": plugin_manifest.get("description", f"{plugin_name} plugin"),
         },

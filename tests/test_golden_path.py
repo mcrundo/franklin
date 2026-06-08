@@ -24,6 +24,8 @@ import pytest
 
 from _fakes import ScriptedClient
 from franklin.assembler import (
+    has_errors,
+    lint_plugin,
     validate_frontmatter,
     validate_links,
     write_plugin_manifest,
@@ -176,6 +178,9 @@ def test_golden_path_ingest_to_assemble(tmp_path: Path) -> None:
     # fail the assemble stage in production.
     assert validate_frontmatter(plugin_root) == []
     assert validate_links(plugin_root) == []
+
+    # The consolidated lint gate must also be clean end-to-end — no errors.
+    assert not has_errors(lint_plugin(plugin_root))
 
     # Sanity — the produced file is discoverable where the planner said.
     assert (plugin_root / "skills" / "golden-path" / "SKILL.md").exists()

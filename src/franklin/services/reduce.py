@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from franklin.assembler import normalize_description, rewrite_root_relative_links
 from franklin.checkpoint import RunDirectory
 from franklin.llm import make_async_client
 from franklin.reducer import DEFAULT_MODEL, generate_artifact_async
@@ -185,6 +186,10 @@ class ReduceService:
         output_root = context.run.output_dir / context.plan.plugin.name
         output_root.mkdir(parents=True, exist_ok=True)
 
+        # All artifact paths the plan will emit — used to repair cross-artifact
+        # links that name a real sibling by the wrong relative base.
+        known_targets = {a.path for a in context.plan.artifacts}
+
         to_generate: list[Artifact] = []
         skipped = 0
         for artifact in targets:
@@ -259,7 +264,14 @@ class ReduceService:
 
                 out_path = output_root / artifact.path
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                body = result.content if result.content.endswith("\n") else result.content + "\n"
+                # Deterministically repair the two defects the model can't be
+                # fully trusted to avoid: wrong-base cross-artifact links, and
+                # multi-line/block-scalar frontmatter descriptions.
+                content = rewrite_root_relative_links(
+                    result.content, artifact.path, known_targets
+                )
+                content = normalize_description(content)
+                body = content if content.endswith("\n") else content + "\n"
                 out_path.write_text(body)
 
                 totals["input"] += result.input_tokens

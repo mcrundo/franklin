@@ -117,23 +117,6 @@ def push_command(
     if result.pr_url:
         console.print(f"  [green]✓[/green] pull request: {result.pr_url}")
 
-    # Patch the README's install section with the real repo name.
-    readme_path = plugin_root / "README.md"
-    if readme_path.exists():
-        readme_text = readme_path.read_text()
-        if "claude plugin marketplace add owner/repo" in readme_text:
-            readme_text = readme_text.replace(
-                "claude plugin marketplace add owner/repo",
-                f"claude plugin marketplace add {repo}",
-            )
-            readme_text = readme_text.replace(
-                "\n*Replace `owner/repo` with the GitHub repository "
-                "after publishing with `franklin push`.*\n",
-                "\n",
-            )
-            readme_path.write_text(readme_text)
-            console.print(f"  [green]✓[/green] updated README.md install section with {repo}")
-
 
 @app.command(name="publish")
 def publish_command(

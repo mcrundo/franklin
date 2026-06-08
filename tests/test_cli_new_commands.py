@@ -5,9 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+import typer
+
 from franklin.checkpoint import RunDirectory
 from franklin.commands.diagnostics import costs_command, stats_command
-from franklin.commands.operations import diff_command, validate_command
+from franklin.commands.operations import diff_command, lint_command, validate_command
 from franklin.schema import (
     Artifact,
     ArtifactType,
@@ -146,6 +149,39 @@ def test_costs_shows_data_when_present(tmp_path: Path) -> None:
 def test_validate_passes_on_good_reference(tmp_path: Path) -> None:
     run = _seed_complete_run(tmp_path / "run")
     validate_command(run_dir=run.root)
+
+
+# ---------------------------------------------------------------------------
+# Lint gate
+# ---------------------------------------------------------------------------
+
+
+def test_lint_passes_on_clean_plugin(tmp_path: Path) -> None:
+    run = _seed_complete_run(tmp_path / "run")
+    lint_command(run_dir=run.root, strict=False)  # no raise
+
+
+def test_lint_exits_nonzero_on_broken_link(tmp_path: Path) -> None:
+    run = _seed_complete_run(tmp_path / "run", plugin_name="p")
+    ref = run.output_dir / "p" / "skills/p/references/intro.md"
+    ref.write_text(ref.read_text() + "\n[bad](does-not-exist.md)\n")
+    with pytest.raises(typer.Exit) as exc:
+        lint_command(run_dir=run.root, strict=False)
+    assert exc.value.exit_code == 1
+
+
+def test_lint_warns_but_passes_on_citation_mismatch(tmp_path: Path) -> None:
+    run = _seed_complete_run(tmp_path / "run", plugin_name="p")
+    ref = run.output_dir / "p" / "skills/p/references/intro.md"
+    ref.write_text(
+        "# Intro\n\nChapter 21 closes the book. _source: ch28 §2_\n\nSee [other](intro.md).\n"
+    )
+    # A warning alone must not fail the default gate.
+    lint_command(run_dir=run.root, strict=False)
+    # …but --strict turns it into a failure.
+    with pytest.raises(typer.Exit) as exc:
+        lint_command(run_dir=run.root, strict=True)
+    assert exc.value.exit_code == 1
 
 
 # ---------------------------------------------------------------------------

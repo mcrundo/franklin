@@ -18,7 +18,7 @@ model: inherit
 
 Key points:
 - `name` should be prefixed with the plugin name to avoid conflicts (e.g., `layered-rails-reviewer`, not `reviewer`).
-- `description` is a long, explicit sentence describing when Claude should delegate to this agent. It's what the agent selector matches against, so include the specific checks, rules, or use cases the agent handles.
+- `description` is a long, explicit sentence describing when Claude should delegate to this agent. It's what the agent selector matches against, so include the specific checks, rules, or use cases the agent handles. Keep it on a **single line** in double quotes — never a YAML block scalar (`>` or `|`) and never wrapped onto a second line, however long it gets; naive plugin loaders break on multi-line descriptions.
 - `model: inherit` is the default and tells Claude Code to use the parent conversation's model.
 
 ### Body structure
