@@ -8,21 +8,78 @@ is deterministic assembly from the plan + book metadata.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from franklin.schema import ArtifactType, BookManifest, PlanManifest
 
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
-def _first_sentence(text: str) -> str:
-    """Extract the first sentence from a brief, for table display."""
-    # Split on ". " or ":" to get just the opening clause.
-    for sep in (". ", ": "):
-        if sep in text:
-            return text[: text.index(sep) + 1].rstrip()
-    # No period — return as-is but cap length.
-    if len(text) > 120:
-        return text[:117] + "..."
-    return text
+# Maximum length for a one-line table/list summary before we cap on a word
+# boundary. Generous enough that almost every authored description fits whole.
+_SUMMARY_CAP = 160
+
+
+def _command_summary(plugin_root: Path, artifact_path: str, fallback: str) -> str:
+    """Return a one-line summary for a command's README table row.
+
+    Prefers the command file's authoritative frontmatter ``description``
+    (a concise single sentence written by the reduce stage) over the
+    plan-stage ``brief``, so the README never paraphrases or truncates
+    mid-word. Falls back to the brief only when the file has no usable
+    description.
+    """
+    description = _read_frontmatter_description(plugin_root / artifact_path)
+    text = description if description else fallback
+    return _cap_on_word_boundary(" ".join(text.split()))
+
+
+def _brief_summary(text: str) -> str:
+    """Return the first sentence of a plan brief, cleaned and length-capped.
+
+    Used for agent bullets, where the file's frontmatter ``description``
+    is a verbose "Use this agent when…" trigger string unsuited to a
+    one-line summary. Splits on a sentence boundary only — never on a
+    colon — to avoid severing a list-introducing clause.
+    """
+    text = " ".join(text.split())
+    if ". " in text:
+        text = text[: text.index(". ") + 1]
+    return _cap_on_word_boundary(text)
+
+
+def _read_frontmatter_description(md_file: Path) -> str | None:
+    try:
+        match = _FRONTMATTER_RE.match(md_file.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if not match:
+        return None
+    try:
+        data: Any = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if isinstance(data, dict):
+        desc = data.get("description")
+        if isinstance(desc, str) and desc.strip():
+            return desc.strip()
+    return None
+
+
+def _cap_on_word_boundary(text: str, limit: int = _SUMMARY_CAP) -> str:
+    """Trim to ``limit`` chars on a word boundary, only if genuinely over.
+
+    Never emits a dangling mid-word ``...``; appends a single ellipsis
+    character on a clean word boundary when (and only when) truncation
+    actually happens.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[: limit + 1].rsplit(" ", 1)[0].rstrip(" ,;:—-")
+    return f"{cut}…"
 
 
 def generate_readme(
@@ -83,7 +140,8 @@ def generate_readme(
         lines.append("|---------|---------|")
         for cmd in commands:
             cmd_name = Path(cmd.path).stem
-            lines.append(f"| `/{plugin.name}:{cmd_name}` | {_first_sentence(cmd.brief)} |")
+            summary = _command_summary(plugin_root, cmd.path, cmd.brief)
+            lines.append(f"| `/{plugin.name}:{cmd_name}` | {summary} |")
         lines.append("")
 
     # ---- agents -----------------------------------------------------------
@@ -94,7 +152,7 @@ def generate_readme(
         lines.append("")
         for agent in agents:
             agent_name = Path(agent.path).stem
-            lines.append(f"- **{agent_name}** — {_first_sentence(agent.brief)}")
+            lines.append(f"- **{agent_name}** — {_brief_summary(agent.brief)}")
         lines.append("")
 
     # ---- reference files --------------------------------------------------

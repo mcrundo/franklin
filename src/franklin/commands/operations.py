@@ -432,6 +432,62 @@ def validate_command(
     )
 
 
+@app.command(name="lint")
+def lint_command(
+    run_dir: Path = typer.Argument(
+        ..., exists=True, file_okay=False, help="Run directory to lint"
+    ),
+    strict: bool = typer.Option(False, "--strict", help="Treat warnings as failures too"),
+) -> None:
+    """Deterministic assemble-time gate over the generated plugin tree.
+
+    Runs every pure-Python check — broken/placeholder links, template
+    leaks, frontmatter (including multi-line descriptions), README table
+    truncation, required manifest fields, and heuristic citation
+    integrity — and exits non-zero if any ``error`` finding is present
+    (or any finding at all under ``--strict``). Faster than grading and
+    the right pre-publish guard against generation regressions.
+    """
+    from franklin.assembler import lint_plugin
+
+    run = RunDirectory(run_dir)
+    if not run.plan_json.exists():
+        console.print(f"[red]error:[/red] no plan.json in {run_dir}")
+        raise typer.Exit(code=1)
+
+    plan = run.load_plan()
+    plugin_root = run.output_dir / plan.plugin.name
+    if not plugin_root.exists():
+        console.print(f"[red]error:[/red] no plugin at {plugin_root}")
+        raise typer.Exit(code=1)
+
+    findings = lint_plugin(plugin_root)
+    errors = [f for f in findings if f.severity == "error"]
+    warnings = [f for f in findings if f.severity == "warning"]
+
+    if not findings:
+        console.print(f"[green]✓[/green] lint clean — {len(plan.artifacts)} artifacts.")
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Severity")
+    table.add_column("Check", style="dim")
+    table.add_column("Location", style="cyan", overflow="fold")
+    table.add_column("Message")
+    for f in findings:
+        loc = str(f.source_file.relative_to(plugin_root.parent))
+        if f.line_number is not None:
+            loc = f"{loc}:{f.line_number}"
+        colour = "red" if f.severity == "error" else "yellow"
+        table.add_row(f"[{colour}]{f.severity}[/{colour}]", f.check, loc, f.message)
+    console.print(table)
+    console.print()
+    console.print(f"  {len(errors)} error(s), {len(warnings)} warning(s)")
+
+    if errors or (strict and warnings):
+        raise typer.Exit(code=1)
+
+
 # ---------------------------------------------------------------------------
 # fix
 # ---------------------------------------------------------------------------

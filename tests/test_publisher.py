@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from franklin.publisher import (
+    PublisherIdentity,
     PushError,
     PushResult,
     _detect_backend,
@@ -29,7 +30,16 @@ def _make_plugin_tree(tmp_path: Path, name: str = "p") -> Path:
         json.dumps({"name": name, "version": "0.1.0", "description": "test plugin"})
     )
     (plugin_root / "SKILL.md").write_text("# Skill\n")
-    (plugin_root / "README.md").write_text("# plugin readme\n")
+    (plugin_root / "README.md").write_text(
+        "# plugin readme\n\n"
+        "## Install\n\n"
+        "```bash\n"
+        "claude plugin marketplace add owner/repo\n"
+        f"claude plugin install {name}@{name}\n"
+        "```\n\n"
+        "*Replace `owner/repo` with the GitHub repository "
+        "after publishing with `franklin push`.*\n"
+    )
     return plugin_root
 
 
@@ -321,6 +331,89 @@ def test_push_plugin_wraps_tree_in_single_plugin_marketplace(tmp_path: Path) -> 
     assert (workspace / "my-plugin" / ".claude-plugin" / "plugin.json").exists()
     assert (workspace / "my-plugin" / "SKILL.md").exists()
     assert (workspace / "README.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Publisher identity threaded to every sink (README / author / marketplace owner)
+# ---------------------------------------------------------------------------
+
+
+def test_publisher_identity_derives_author_and_repo() -> None:
+    identity = PublisherIdentity.from_repo("palkan/skills")
+    assert identity.repo == "palkan/skills"
+    assert identity.author == {"name": "palkan"}
+
+    enriched = PublisherIdentity.from_repo(
+        "palkan/skills", author_name="Vladimir", author_email="v@example.com"
+    )
+    assert enriched.author == {"name": "Vladimir", "email": "v@example.com"}
+
+
+def _push_palkan(tmp_path: Path, name: str = "skills") -> Path:
+    plugin_root = _make_plugin_tree(tmp_path, name=name)
+    commands: list[list[str]] = []
+    with (
+        patch("franklin.publisher.shutil.which", return_value="/usr/local/bin/gh"),
+        patch(
+            "franklin.publisher.subprocess.run",
+            side_effect=_make_fake_run(commands, repo_exists=True),
+        ),
+    ):
+        push_plugin(
+            plugin_root,
+            repo=f"palkan/{name}",
+            commit_message=f"franklin: assemble {name} v0.1.0",
+        )
+    return plugin_root.parent / f"_publish_{name}"
+
+
+def test_push_substitutes_real_repo_into_all_readme_copies(tmp_path: Path) -> None:
+    workspace = _push_palkan(tmp_path)
+
+    for readme in (workspace / "README.md", workspace / "skills" / "README.md"):
+        text = readme.read_text()
+        assert "claude plugin marketplace add palkan/skills" in text
+        assert "owner/repo" not in text
+        assert "Replace `owner/repo`" not in text
+
+
+def test_push_sets_marketplace_owner_to_publisher_not_franklin(tmp_path: Path) -> None:
+    workspace = _push_palkan(tmp_path)
+    manifest = json.loads((workspace / ".claude-plugin" / "marketplace.json").read_text())
+    assert manifest["owner"] == {"name": "palkan"}
+    assert manifest["owner"]["name"] != "franklin"
+
+
+def test_push_injects_author_into_bundle_plugin_json(tmp_path: Path) -> None:
+    workspace = _push_palkan(tmp_path)
+    manifest = json.loads((workspace / "skills" / ".claude-plugin" / "plugin.json").read_text())
+    assert manifest["author"] == {"name": "palkan"}
+
+
+def test_push_preserves_existing_author(tmp_path: Path) -> None:
+    plugin_root = _make_plugin_tree(tmp_path, name="skills")
+    manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
+    data = json.loads(manifest_path.read_text())
+    data["author"] = {"name": "Original Author", "email": "orig@example.com"}
+    manifest_path.write_text(json.dumps(data))
+
+    commands: list[list[str]] = []
+    with (
+        patch("franklin.publisher.shutil.which", return_value="/usr/local/bin/gh"),
+        patch(
+            "franklin.publisher.subprocess.run",
+            side_effect=_make_fake_run(commands, repo_exists=True),
+        ),
+    ):
+        push_plugin(
+            plugin_root,
+            repo="palkan/skills",
+            commit_message="franklin: assemble skills v0.1.0",
+        )
+
+    workspace = plugin_root.parent / "_publish_skills"
+    bundle = json.loads((workspace / "skills" / ".claude-plugin" / "plugin.json").read_text())
+    assert bundle["author"] == {"name": "Original Author", "email": "orig@example.com"}
 
 
 def test_push_plugin_requires_plugin_manifest(tmp_path: Path) -> None:

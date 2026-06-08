@@ -12,7 +12,9 @@ the "generator invented a path" failure mode.
 
 from __future__ import annotations
 
+import posixpath
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,6 +114,71 @@ def _validate_file(md_file: Path) -> list[BrokenLink]:
                     )
                 )
     return broken
+
+
+def relpath_from(emitting_file: str, target: str) -> str:
+    """Return the file-relative link from ``emitting_file`` to ``target``.
+
+    Both arguments are plugin-root-relative POSIX paths (e.g.
+    ``agents/deal-reviewer.md`` and ``commands/run-discovery.md``). The
+    result is what a markdown link in ``emitting_file`` must use to point at
+    ``target`` — e.g. ``../commands/run-discovery.md``.
+    """
+    from_dir = posixpath.dirname(emitting_file)
+    return posixpath.relpath(target, start=from_dir or ".")
+
+
+def rewrite_root_relative_links(
+    content: str, emitting_file: str, known_targets: Iterable[str]
+) -> str:
+    """Rewrite cross-artifact links that name a real artifact by the wrong base.
+
+    Generated artifact bodies frequently link to a sibling artifact using a
+    path relative to the *plugin root* (``commands/run-discovery.md``) or with
+    the ``skills/<name>/`` prefix dropped (``references/core/x.md``) instead of
+    a path relative to the *emitting file's own directory*. Both forms resolve
+    to nonexistent locations.
+
+    For each inline link whose target does not already resolve to a known
+    artifact from ``emitting_file``'s directory, this finds the artifact the
+    author meant — by exact root-relative match, else by a unique path-suffix
+    match — and rewrites the link to the correct file-relative path. Links
+    that already resolve correctly, external URLs, anchors, and placeholders
+    are left untouched, so a correctly-authored link is never corrupted.
+    """
+    targets = {_normalize(t) for t in known_targets}
+    from_dir = posixpath.dirname(emitting_file)
+
+    def _resolves(path_only: str) -> bool:
+        return _normalize(posixpath.join(from_dir, path_only)) in targets
+
+    def _intended_target(path_only: str) -> str | None:
+        normalized = _normalize(path_only)
+        if normalized in targets:
+            return normalized
+        suffix = "/" + normalized
+        matches = [t for t in targets if t == normalized or t.endswith(suffix)]
+        return matches[0] if len(matches) == 1 else None
+
+    def _sub(match: re.Match[str]) -> str:
+        text, target = match.group(1), match.group(2).strip()
+        if _is_external_or_same_file_anchor(target) or _looks_like_placeholder(target):
+            return match.group(0)
+        path_only, sep, frag = target.partition("#")
+        path_only = path_only.strip()
+        if not path_only or _resolves(path_only):
+            return match.group(0)
+        intended = _intended_target(path_only)
+        if intended is None:
+            return match.group(0)
+        fixed = relpath_from(emitting_file, intended)
+        return f"[{text}]({fixed}{sep}{frag})"
+
+    return _INLINE_LINK.sub(_sub, content)
+
+
+def _normalize(path: str) -> str:
+    return posixpath.normpath(path)
 
 
 def _is_external_or_same_file_anchor(target: str) -> bool:

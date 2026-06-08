@@ -20,7 +20,7 @@ allowed-tools:
 ---
 ```
 
-The `description` should clearly say when Claude should use this skill — it's what the tool selector matches against. Include trigger phrases in natural language (e.g. "use when reviewing Rails code for layered architecture violations").
+The `description` should clearly say when Claude should use this skill — it's what the tool selector matches against. Include trigger phrases in natural language (e.g. "use when reviewing Rails code for layered architecture violations"). Write it on a **single line** — never a YAML block scalar (`>` or `|`) and never wrapped onto a second line, however long it gets; naive plugin loaders break on multi-line descriptions.
 
 ### Body structure
 

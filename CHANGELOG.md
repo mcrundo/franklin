@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `franklin lint <run_dir>` — a deterministic assemble-time gate over the
+  generated plugin tree. Aggregates the link, template-leak, and
+  frontmatter validators with new checks (README command-table
+  truncation, required `plugin.json` fields, and a heuristic
+  citation-integrity scan) and exits non-zero on any error. `--strict`
+  also fails on warnings. The golden-path oracle now asserts the gate is
+  clean end-to-end.
+- `PublisherIdentity` — a single resolved publishing identity
+  (`owner/repo`, author name/email) threaded through `franklin push` to
+  every sink: the README install command, `plugin.json` `author`,
+  `marketplace.json` `owner`, and the git remote.
+
+### Fixed
+
+- Published bundles no longer ship the literal `owner/repo` placeholder.
+  `franklin push` now substitutes the real repository into **every**
+  README copy (working tree, nested bundle, and top-level marketplace
+  README) and drops the "Replace `owner/repo`…" hint.
+- `marketplace.json` `owner` is now the real publisher instead of the
+  hardcoded `franklin` default, and the published `plugin.json` always
+  carries an `author`.
+- README command tables now use each command's authoritative frontmatter
+  `description` verbatim instead of a paraphrase truncated mid-word with
+  a dangling `...`.
+- Cross-artifact links in generated agent/command/skill bodies are
+  repaired at write time: a link that names a real sibling by the wrong
+  relative base (e.g. `commands/x.md` or `references/y.md` from an
+  `agents/` file) is rewritten to the correct file-relative path.
+- Multi-line / block-scalar (`>` / `|`) frontmatter `description` values
+  are normalized to a single quoted line at write time, and the
+  frontmatter validator now flags any that slip through — naive plugin
+  loaders break on multi-line descriptions.
+- The reduce prompts now instruct the model to keep `description` on one
+  line and to cite chapter numbers only from the structured `_source`
+  tag, reducing fabricated in-prose chapter references.
+
 ## [0.4.4] - 2026-04-14
 
 ### Added

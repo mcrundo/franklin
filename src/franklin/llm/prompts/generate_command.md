@@ -15,7 +15,7 @@ argument-hint: <optional usage hint shown in the command palette, e.g. "[class-n
 ---
 ```
 
-Keep the description under 80 characters — it's what appears in the command palette when the user types `/`. Start with an action verb, no "Slash command to" prefix. Example: `"Extract business logic into a service class"`.
+Keep the description under 80 characters — it's what appears in the command palette when the user types `/`. Start with an action verb, no "Slash command to" prefix. Example: `"Extract business logic into a service class"`. Write it on a **single line** — never a YAML block scalar (`>` or `|`) and never wrapped onto a second line.
 
 ### Body structure
 
